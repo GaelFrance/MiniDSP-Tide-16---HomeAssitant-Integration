@@ -124,9 +124,8 @@ through "Ch16"...):
 
 ## Waking from standby
 
-Confirmed by a live test: in standby, the Tide16 fully shuts down its
-network stack. There's no way to send a wake command over the network -
-only the front-panel encoder, IR, a 12V trigger, or a smart plug work.
+Confirmed by a live test: There's no way to send a wake command over the network for now -
+only the front-panel encoder, or IR trigger will work.
 
 ## Contributing
 
