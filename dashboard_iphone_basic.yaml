@@ -1,0 +1,210 @@
+title: Tide16
+views:
+  - title: Main
+    path: tide16-main
+    icon: mdi:speaker-multiple
+    cards:
+      - type: markdown
+        content: |
+          # TIDE16
+
+      - type: markdown
+        content: >
+          **Status:** {{ states('sensor.tide16_status') }}
+          &nbsp;&nbsp;**Source:** {{ states('sensor.tide16_source') }}
+          &nbsp;&nbsp;**Audio:** {{ 'Signal' if is_state('binary_sensor.tide16_audio_signal', 'on') else 'Silence' }}
+
+      - type: media-control
+        entity: media_player.tide16
+
+      - type: entities
+        title: Volume
+        entities:
+          - entity: number.tide16_volume
+            name: Volume
+          - entity: switch.tide16_mute
+            name: Mute
+
+      - type: entities
+        title: Infos (v15)
+        entities:
+          - entity: sensor.tide16_stream
+            name: Flux entrant
+          - entity: sensor.tide16_bluetooth
+            name: Bluetooth
+          - entity: sensor.tide16_preset
+            name: Preset actif
+          - entity: sensor.tide16_speaker_config
+            name: Config enceintes
+          - entity: switch.tide16_dirac_live
+            name: Dirac Live
+          - entity: binary_sensor.tide16_dirac_measuring
+            name: Mesure Dirac en cours
+
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: button
+            name: Volume -
+            icon: mdi:volume-minus
+            entity: button.tide16_volume_down
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_volume_down
+          - type: button
+            name: Volume +
+            icon: mdi:volume-plus
+            entity: button.tide16_volume_up
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_volume_up
+
+      - type: grid
+        columns: 4
+        square: false
+        cards:
+          - type: button
+            name: "Spotify"
+            show_state: false
+            entity: button.tide16_source_spotify
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_spotify
+          - type: button
+            name: "SPDIF 2"
+            show_state: false
+            entity: button.tide16_source_spdif_2
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_spdif_2
+          - type: button
+            name: "TOSLINK 1"
+            show_state: false
+            entity: button.tide16_source_toslink_1
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_toslink_1
+          - type: button
+            name: "TOSLINK 2"
+            show_state: false
+            entity: button.tide16_source_toslink_2
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_toslink_2
+          - type: button
+            name: "Apple TV"
+            show_state: false
+            entity: button.tide16_source_apple_tv
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_apple_tv
+          - type: button
+            name: "HDMI 2"
+            show_state: false
+            entity: button.tide16_source_hdmi_2
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_hdmi_2
+          - type: button
+            name: "HDMI 3"
+            show_state: false
+            entity: button.tide16_source_hdmi_3
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_hdmi_3
+          - type: button
+            name: "ARC / eARC"
+            show_state: false
+            entity: button.tide16_source_arc_earc
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_arc_earc
+          - type: button
+            name: "XLR"
+            show_state: false
+            entity: button.tide16_source_xlr
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_xlr
+          - type: button
+            name: "RCA"
+            show_state: false
+            entity: button.tide16_source_rca
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_rca
+          - type: button
+            name: "USB"
+            show_state: false
+            entity: button.tide16_source_usb
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_usb
+          - type: button
+            name: "Bluetooth"
+            show_state: false
+            entity: button.tide16_source_bluetooth
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_bluetooth
+
+      - type: grid
+        columns: 3
+        square: false
+        cards:
+          - type: button
+            name: Shutdown
+            icon: mdi:power
+            entity: button.tide16_shutdown
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_shutdown
+          - type: button
+            name: Reboot
+            icon: mdi:restart
+            entity: button.tide16_reboot
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_reboot
+          - type: button
+            name: BT Pair
+            icon: mdi:bluetooth
+            entity: button.tide16_bluetooth_pair
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_bluetooth_pair

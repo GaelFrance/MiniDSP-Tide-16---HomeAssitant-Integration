@@ -1,0 +1,312 @@
+# "Advanced" dashboard - v14, fully native, no HACS card required.
+#
+# Replaces the earlier version built on custom:button-card, which kept
+# hitting action-schema compatibility issues (see CHANGELOG.md, v10 to
+# v13). Uses only native Home Assistant cards: the "sections" view
+# (type: sections), "tile" and "button" cards, with tap_action in the
+# current format (action: perform-action / perform_action: .../
+# target: entity_id: ...).
+#
+# No HACS install needed - paste directly into the dashboard editor
+# (YAML mode) or into a dashboard file.
+
+views:
+  - title: miniDSP Tide16
+    path: tide16
+    icon: mdi:audio-video
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Tide16
+            heading_style: title
+            icon: mdi:audio-video
+          - type: tile
+            entity: sensor.tide16_status
+            name: État
+            icon: mdi:connection
+            tap_action:
+              action: none
+          - type: tile
+            entity: sensor.tide16_source
+            name: Source active
+            icon: mdi:import
+            tap_action:
+              action: none
+          - type: tile
+            entity: binary_sensor.tide16_audio_signal
+            name: Signal audio
+            icon: mdi:sine-wave
+            state_content:
+              - state
+              - peak_db
+            tap_action:
+              action: none
+      - type: grid
+        cards:
+          - type: heading
+            heading: Média
+            heading_style: title
+            icon: mdi:cast-audio
+          # v25: this all-in-one card (volume/mute/source/power) already
+          # existed in dashboard_iphone_basic.yaml since v9, but had been
+          # left out here when the advanced dashboard was rewritten at
+          # v14 - added so both dashboards cover the same entities.
+          - type: media-control
+            entity: media_player.tide16
+      - type: grid
+        cards:
+          - type: heading
+            heading: Volume
+            heading_style: title
+            icon: mdi:volume-high
+          - type: tile
+            entity: number.tide16_volume
+            name: Volume
+            features:
+              - type: numeric-input
+                style: slider
+          - type: button
+            entity: button.tide16_volume_down
+            name: −2 dB
+            icon: mdi:volume-minus
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_volume_down
+            hold_action:
+              action: none
+          - type: button
+            entity: switch.tide16_mute
+            name: Muet
+            icon: mdi:volume-mute
+            show_state: true
+            tap_action:
+              action: toggle
+            hold_action:
+              action: none
+          - type: button
+            entity: button.tide16_volume_up
+            name: +2 dB
+            icon: mdi:volume-plus
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_volume_up
+            hold_action:
+              action: none
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sources HDMI
+            heading_style: title
+            icon: mdi:hdmi-port
+          - type: button
+            entity: button.tide16_source_apple_tv
+            name: Apple TV
+            icon: mdi:apple
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_apple_tv
+          - type: button
+            entity: button.tide16_source_hdmi_2
+            name: HDMI 2
+            icon: mdi:hdmi-port
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_hdmi_2
+          - type: button
+            entity: button.tide16_source_hdmi_3
+            name: HDMI 3
+            icon: mdi:hdmi-port
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_hdmi_3
+          - type: button
+            entity: button.tide16_source_arc_earc
+            name: TV ARC / eARC
+            icon: mdi:television
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_arc_earc
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sources numériques
+            heading_style: title
+            icon: mdi:music-box-multiple
+          - type: button
+            entity: button.tide16_source_spotify
+            name: Spotify / SPDIF 1
+            icon: mdi:spotify
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_spotify
+          - type: button
+            entity: button.tide16_source_spdif_2
+            name: SPDIF 2
+            icon: mdi:audio-input-stereo-minijack
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_spdif_2
+          - type: button
+            entity: button.tide16_source_toslink_1
+            name: Toslink 1
+            icon: mdi:toslink
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_toslink_1
+          - type: button
+            entity: button.tide16_source_toslink_2
+            name: Toslink 2
+            icon: mdi:toslink
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_toslink_2
+          - type: button
+            entity: button.tide16_source_usb
+            name: USB
+            icon: mdi:usb
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_usb
+      - type: grid
+        cards:
+          - type: heading
+            heading: Analogique et Bluetooth
+            heading_style: title
+            icon: mdi:audio-input-rca
+          - type: button
+            entity: button.tide16_source_xlr
+            name: XLR
+            icon: mdi:audio-input-xlr
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_xlr
+          - type: button
+            entity: button.tide16_source_rca
+            name: RCA
+            icon: mdi:audio-input-rca
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_rca
+          - type: button
+            entity: button.tide16_source_bluetooth
+            name: Bluetooth
+            icon: mdi:bluetooth-audio
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_source_bluetooth
+          - type: button
+            entity: button.tide16_bluetooth_pair
+            name: Appairage Bluetooth
+            icon: mdi:bluetooth-connect
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_bluetooth_pair
+      - type: grid
+        cards:
+          - type: heading
+            heading: Système
+            heading_style: title
+            icon: mdi:cog
+          - type: button
+            entity: button.tide16_shutdown
+            name: Mise en veille
+            icon: mdi:power
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_shutdown
+            hold_action:
+              action: none
+          - type: button
+            entity: button.tide16_reboot
+            name: Redémarrer
+            icon: mdi:restart
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.tide16_reboot
+            hold_action:
+              action: none
+      - type: grid
+        cards:
+          - type: heading
+            heading: Infos (v15)
+            heading_style: title
+            icon: mdi:information-outline
+          - type: tile
+            entity: sensor.tide16_stream
+            name: Flux entrant
+            icon: mdi:waveform
+            tap_action:
+              action: none
+          - type: tile
+            entity: sensor.tide16_bluetooth
+            name: Bluetooth
+            icon: mdi:bluetooth-audio
+            tap_action:
+              action: none
+          - type: tile
+            entity: sensor.tide16_preset
+            name: Preset actif
+            icon: mdi:tune-variant
+            tap_action:
+              action: none
+          - type: tile
+            entity: sensor.tide16_speaker_config
+            name: Config enceintes
+            icon: mdi:speaker-multiple
+            tap_action:
+              action: none
+      - type: grid
+        cards:
+          - type: heading
+            heading: Dirac Live
+            heading_style: title
+            icon: mdi:auto-fix
+          - type: tile
+            entity: switch.tide16_dirac_live
+            name: Dirac Live
+            icon: mdi:auto-fix
+            features:
+              - type: toggle
+          - type: tile
+            entity: binary_sensor.tide16_dirac_measuring
+            name: Mesure en cours
+            icon: mdi:tune-variant
+            tap_action:
+              action: none

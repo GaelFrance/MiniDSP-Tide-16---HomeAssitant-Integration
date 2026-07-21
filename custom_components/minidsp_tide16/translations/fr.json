@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion à votre miniDSP Tide16",
+        "description": "Entrez le nom d'hôte ou l'adresse IP du Tide16 sur votre réseau local (ex. minidsp-tide.local ou 192.168.1.50).",
+        "data": {
+          "host": "Hôte ou adresse IP",
+          "port": "Port"
+        }
+      },
+      "reconfigure": {
+        "title": "Mettre à jour la connexion au miniDSP Tide16",
+        "description": "Modifiez le nom d'hôte ou l'adresse IP si le Tide16 a changé d'adresse sur votre réseau.",
+        "data": {
+          "host": "Hôte ou adresse IP",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter à un Tide16 à cette adresse. Vérifiez l'hôte/IP et que l'appareil est allumé."
+    },
+    "abort": {
+      "single_instance_allowed": "Un seul miniDSP Tide16 peut être configuré.",
+      "reconfigure_successful": "Les paramètres de connexion ont été mis à jour."
+    }
+  }
+}

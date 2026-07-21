@@ -1,0 +1,12 @@
+{
+  "domain": "minidsp_tide16",
+  "name": "miniDSP Tide16",
+  "codeowners": ["@GaelFrance"],
+  "config_flow": true,
+  "documentation": "https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration",
+  "issue_tracker": "https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration/issues",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.28.0",
+  "single_config_entry": true
+}
