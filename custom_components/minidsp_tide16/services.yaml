@@ -1,0 +1,8 @@
+request_fast_metering:
+  name: Request fast metering
+  description: >-
+    Temporarily raise the RMS polling rate so the front-panel card's
+    16-channel bar meter animates smoothly. The grant is short-lived and
+    must be renewed by repeated calls (the card does this automatically
+    while it is on screen); once the calls stop, polling drops back to the
+    idle rate on its own. Calling this by hand is rarely useful.

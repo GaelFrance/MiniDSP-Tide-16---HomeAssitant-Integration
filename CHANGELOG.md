@@ -4,6 +4,78 @@ Full version history of the miniDSP Tide16 integration, from the very
 first cut (reverse-engineered against the stock site) to today. For the
 current state (features, installation, entities), see `README.md`.
 
+## v29: per-channel metering + on-demand fast polling
+
+Two additions for dashboards that want a live output meter. Both are
+additive - no v1-v28 behaviour changes.
+
+**`sensor.tide16_channel_levels`.** Every `get_rms_block_db` reply
+already carried all 16 channel levels; `_peak_db()` collapsed them to
+the loudest one and dropped the rest. `_channels_db()` now keeps them,
+ordered by the device's own 1-based `index` field rather than by array
+position - that costs nothing and means a bar can never end up attached
+to the wrong channel if the device ever returns them out of order.
+
+The sensor also carries a `channel_names` attribute, from two endpoints
+that were not previously called. `get_output_speakers` returns the
+speaker assigned to each output (`{"1": "LeftFront", ... "11": "Sub2"}`)
+keyed by that same 1-based index, and `get_custom_out_port_names`
+returns any names the owner set on the device itself, which win over the
+stock ones. Both are requested once at startup alongside
+`get_source_names`.
+
+This is worth having because it distinguishes an unassigned output from
+an assigned one that is merely silent: on a 7.2.2 layout the device
+returns exactly 11 entries and outputs 12-16 are absent from the map,
+yet all five meter -122.5, identical to silence. The list is positional
+against `channels` and is shorter than it whenever the layout uses fewer
+than 16 outputs, with `None` for an unassigned output.
+
+They're one attribute rather than 16 sensors on purpose: a meter wants
+them as one coherent frame, and one entity churning at 4 Hz is very
+different from sixteen doing it. The *state* is the peak rounded to
+whole dB, because the state is what the recorder would store and an
+unrounded peak changes on essentially every poll. Exclude the entity
+from the recorder.
+
+**`minidsp_tide16.request_fast_metering`.** Metering isn't pushed, and
+the 5 s idle poll makes a meter look broken rather than slow. The
+service grants `FAST_RMS_INTERVAL` (0.25 s) polling for
+`FAST_METERING_HOLD` (3 s); a card calls it on a ~1 s keepalive while
+it's on screen.
+
+The hold being a *deadline* rather than a flag is the whole design.
+Every exit from fast mode is the deadline lapsing, so nothing has to
+actively cancel anything - a caller that vanishes without telling us
+(tab closed, view switched, lid shut, background tab throttled, card
+crashed) costs at most 3 s of extra polling. There is no state that can
+get stuck fast. The idle `RMS_REFRESH_INTERVAL` timer is never touched
+and resumes as the cadence the moment the fast timer removes itself.
+
+The service takes no target: there's only ever one Tide16, and making a
+card resolve an entity_id just to ask "please meter faster" would buy
+nothing. Registration is guarded by `has_service()` so a reload doesn't
+double-register.
+
+**Deliberately not included:** the dB-to-bar-height mapping. That's a
+display choice, and the integration should keep reporting raw dB
+regardless of how any given dashboard draws it.
+
+Measured while validating: 40/40 replies at 3.86 Hz, median round-trip
+3.7 ms, p95 36 ms, max 104 ms - comfortably inside the 250 ms budget.
+Real content (Dolby Digital Plus 7.2.2, -42 dB master) gave p05 -80.6,
+median -62.7, p95 -46.0, max **-42.9** dB. That max landing on the
+master volume setting means output level tracks volume, which is worth
+knowing for anyone mapping dB to a bar height.
+
+One trap worth recording: an idle link looks identical to a working one
+at every level *except* the metering itself. `sensor.tide16_stream`
+reports the negotiated format and `speaker_config` reports 7.2.2 even
+with nothing playing, so both look like proof of playback and are not.
+During silence every channel reads exactly -122.5, which is easily
+mistaken for "the firmware never populates this". The only honest
+playback indicator is the metering data moving.
+
 ## v28: published on GitHub
 
 Repository scaffolding added for the public GitHub repo

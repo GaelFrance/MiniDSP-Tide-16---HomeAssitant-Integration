@@ -35,6 +35,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             Tide16StatusSensor(coordinator),
+            Tide16ChannelLevelsSensor(coordinator),
             Tide16SourceSensor(coordinator),
             Tide16BluetoothSensor(coordinator),
             Tide16StreamSensor(coordinator),
@@ -69,6 +70,48 @@ class Tide16StatusSensor(_Tide16Sensor):
     @property
     def native_value(self) -> str | None:
         return self._coordinator.data.get("status")
+
+
+class Tide16ChannelLevelsSensor(_Tide16Sensor):
+    """Per-channel output levels for the front-panel bar meter (v22).
+
+    The 16 values live in an attribute rather than in 16 separate sensors
+    on purpose: the card wants them as one coherent frame, and while the
+    meter is being watched this updates 4x/sec - one entity churning at
+    that rate is very different from sixteen.
+
+    `channel_names` is the speaker assigned to each output, positionally
+    aligned with `channels`, with None for outputs the device has not
+    assigned. It is shorter than `channels` whenever the layout uses
+    fewer than 16 outputs - zip() the two rather than indexing blindly.
+
+    The state itself is the peak, rounded to whole dB. That rounding is
+    load-bearing: the state is what the recorder would store, and an
+    unrounded peak changes on essentially every single poll. The attribute
+    carries the real precision for the card.
+
+    EXCLUDE THIS FROM THE RECORDER - see the recorder: block in
+    configuration.yaml. Nothing here is worth 4 rows/sec of database.
+    """
+
+    _attr_name = "Channel Levels"
+    _attr_unique_id = "minidsp_tide16_channel_levels"
+    _attr_icon = "mdi:chart-bar"
+    _attr_native_unit_of_measurement = "dB"
+    _object_id = "tide16_channel_levels"
+
+    @property
+    def native_value(self) -> float | None:
+        peak = self._coordinator.data.get("signal_peak_db")
+        return None if peak is None else round(peak)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "channels": self._coordinator.data.get("channel_db"),
+            "channel_names": self._coordinator.data.get("channel_names"),
+            "peak_db": self._coordinator.data.get("signal_peak_db"),
+        }
 
 
 class Tide16SourceSensor(_Tide16Sensor):
