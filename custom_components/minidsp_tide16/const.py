@@ -31,6 +31,30 @@ RECONNECT_INTERVAL = 10  # seconds between reconnect attempts while offline
 RMS_REFRESH_INTERVAL = 5  # seconds - metering only, no push notification exists
 FULL_REFRESH_INTERVAL = 60  # seconds - safety-net resync of the pushed fields
 
+# v22: the front-panel Lovelace card draws a live 16-channel bar meter, and
+# 5s between samples reads as a broken meter rather than a slow one. Rather
+# than raise the cadence globally - which would poll the device 4x/sec
+# forever, including when nobody has the page open - the card asks for the
+# fast cadence via the request_fast_metering service and keeps re-asking on
+# a keepalive while it is on screen.
+#
+# HOLD is deliberately several times the keepalive period the card uses: it
+# is what makes this self-correcting. If the keepalives stop for any reason
+# (tab closed, view switched, laptop lid shut, browser throttling a
+# background tab, card crashed) nothing has to actively cancel anything -
+# the hold simply lapses and the coordinator drops back to the idle
+# interval. There is no state that can get stuck fast.
+FAST_RMS_INTERVAL = 0.25  # seconds - only while a card is actually watching
+FAST_METERING_HOLD = 3.0  # seconds of fast polling granted per keepalive
+
+# Measured on live hardware, 40/40 replies at 3.86 Hz: median round-trip
+# 3.7 ms, p95 36 ms, max 104 ms. Comfortably inside the 250 ms budget above.
+#
+# The dB -> bar-height mapping deliberately lives in the card (floor_db /
+# ceiling_db options), not here: it is a display choice, and the
+# integration should keep reporting raw dB regardless of how any
+# particular dashboard chooses to draw it.
+
 # Official range, confirmed on docs.minidsp.com: set_volume_db /
 # get_volume_db use -127.5 dB (effectively silent) to 0.0 dB (maximum).
 # Previously guessed as -100.0 before the official docs were published -
@@ -51,6 +75,29 @@ VOLUME_STEP_DB = 2.0  # size of one +/- button press
 # needed. -125.5 dB was the observed silence floor on live hardware; tune
 # this threshold if it's too sensitive/insensitive for your setup.
 SIGNAL_THRESHOLD_DB = -70.0
+
+# v22 CONFIRMED WORKING, with real playback (Dolby Digital Plus 7.2.2 from
+# the Apple TV via Roku, -42 dB, unmuted):
+#   out[0:11]  live, moving frame to frame, roughly -44 to -68 dB
+#   out[11:16] flat -122.5 - correct, 7.2.2 is 11 channels (7 bed + 2 sub
+#              + 2 height), so the last five are genuinely unused
+# The "out" array IS populated, exactly as the paragraph above says.
+#
+# TRAP, cost an hour: an idle link looks identical to a working one at
+# every level EXCEPT the metering itself. sensor.tide16_stream reports the
+# NEGOTIATED format ("Dolby TrueHD / MLP") and speaker_config reports 7.2.2
+# even with nothing playing, so both look like proof of playback and are
+# not. During true silence every channel reads exactly -122.5, which is
+# easily mistaken for "the firmware never populates this". The only honest
+# playback indicator is the metering data moving.
+#
+# Measured level distribution over 40 frames of real content at -42 dB
+# master: p05 -80.6, median -62.7, p95 -46.0, max -42.9.
+#
+# Note the max lands on the master volume setting. Output level tracks
+# volume, so the card's dB->height mapping is anchored to
+# number.tide16_volume rather than to fixed dB values - otherwise the bars
+# would read completely differently at every volume.
 
 # Confirmed on docs.minidsp.com (get_source_names / set_source): source
 # label -> id mapping. Matches what was previously reverse-engineered live,

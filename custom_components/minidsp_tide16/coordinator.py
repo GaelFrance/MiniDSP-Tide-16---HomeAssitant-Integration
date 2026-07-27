@@ -98,6 +98,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
+    FAST_METERING_HOLD,
+    FAST_RMS_INTERVAL,
     FULL_REFRESH_INTERVAL,
     MAX_VOLUME_DB,
     MIN_VOLUME_DB,
@@ -143,6 +145,35 @@ def _peak_db(entries) -> float | None:
     return best
 
 
+def _channels_db(entries) -> list[float] | None:
+    """Per-channel dB from a get_rms_block_db 'out' array, ordered by the
+    device's own 1-based "index" field rather than by array position.
+
+    v22: this data was always being fetched - _peak_db above just collapsed
+    all 16 channels down to the single loudest one and threw the rest away.
+    The front-panel card's bar meter needs them individually, so they're
+    kept here too. Same "out only" reasoning as _peak_db applies.
+
+    Sorting by "index" rather than trusting array order costs nothing and
+    means a bar can never end up attached to the wrong channel if the
+    device ever returns them out of order.
+    """
+    if not isinstance(entries, list):
+        return None
+    vals: dict[int, float] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        val = item.get("val")
+        idx = item.get("index")
+        if not isinstance(val, (int, float)) or not isinstance(idx, int):
+            continue
+        vals[idx] = float(val)
+    if not vals:
+        return None
+    return [vals[k] for k in sorted(vals)]
+
+
 class Tide16Coordinator:
     """Owns the persistent WebSocket connection and the last-known state."""
 
@@ -158,6 +189,18 @@ class Tide16Coordinator:
         self._unsub_hass_stop = None
         self._rms_lock = asyncio.Lock()
         self._resync_lock = asyncio.Lock()
+
+        # v22: fast-metering hold. _fast_until is a loop timestamp, not a
+        # flag - see async_request_fast_metering for why that's what makes
+        # this impossible to leave stuck in fast mode.
+        self._unsub_fast_refresh = None
+        self._fast_until: float = 0.0
+
+        # v22: the two sources that feed data["channel_names"]. Kept
+        # separate rather than merged on arrival because they arrive in
+        # either order and custom names must win regardless.
+        self._output_speakers: dict[str, str] = {}
+        self._custom_port_names: dict[str, str] = {}
 
         # v19: separate from self.data["volume_db"] (the last CONFIRMED
         # value) - this tracks the target of a volume command that hasn't
@@ -180,6 +223,8 @@ class Tide16Coordinator:
             "source": None,
             "source_names": {},  # source id -> live display name (get_source_names)
             "signal_peak_db": None,
+            "channel_db": None,  # v22: per-channel output levels, 16 floats
+            "channel_names": [],  # v22: 1-based output index -> speaker name
             "bt_paired": None,
             "bt_track_title": None,
             "bt_track_artist": None,
@@ -209,6 +254,8 @@ class Tide16Coordinator:
             "get_mute": self._apply_mute,
             "get_source": self._apply_source,
             "get_source_names": self._apply_source_names,
+            "get_output_speakers": self._apply_output_speakers,
+            "get_custom_out_port_names": self._apply_custom_out_port_names,
             "get_bluetooth_status": self._apply_bluetooth,
             "get_stream_properties": self._apply_stream,
             "get_speaker_config_number": self._apply_speaker_config,
@@ -263,6 +310,9 @@ class Tide16Coordinator:
         if self._unsub_rms_refresh is not None:
             self._unsub_rms_refresh()
             self._unsub_rms_refresh = None
+        if self._unsub_fast_refresh is not None:
+            self._unsub_fast_refresh()
+            self._unsub_fast_refresh = None
         if self._unsub_full_refresh is not None:
             self._unsub_full_refresh()
             self._unsub_full_refresh = None
@@ -276,6 +326,42 @@ class Tide16Coordinator:
 
     @callback
     def _async_rms_refresh(self, _now) -> None:
+        if self._ws is not None and not self._ws.closed:
+            self.hass.async_create_task(self._request_rms_state())
+
+    @callback
+    def async_request_fast_metering(self, duration: float = FAST_METERING_HOLD) -> None:
+        """Grant FAST_RMS_INTERVAL polling for `duration` seconds.
+
+        Called (repeatedly, as a keepalive) by the front-panel card while
+        its bar meter is actually on screen. Extending a deadline rather
+        than setting a flag is what makes this safe: every path out of fast
+        mode is the deadline lapsing, so a card that goes away without
+        telling us - closed tab, switched view, crashed, throttled by the
+        browser - costs at most FAST_METERING_HOLD seconds of extra polling
+        rather than leaving the device being hammered forever.
+
+        Repeated calls just push the deadline out; the timer itself is
+        created once and tears itself down in _async_fast_refresh.
+        """
+        self._fast_until = max(self._fast_until, self.hass.loop.time() + duration)
+        if self._unsub_fast_refresh is None:
+            self._unsub_fast_refresh = async_track_time_interval(
+                self.hass,
+                self._async_fast_refresh,
+                timedelta(seconds=FAST_RMS_INTERVAL),
+            )
+
+    @callback
+    def _async_fast_refresh(self, _now) -> None:
+        # Self-cancelling: the moment the hold lapses this timer removes
+        # itself, and the normal RMS_REFRESH_INTERVAL timer (which was
+        # never touched) carries on as the idle cadence.
+        if self.hass.loop.time() >= self._fast_until:
+            if self._unsub_fast_refresh is not None:
+                self._unsub_fast_refresh()
+                self._unsub_fast_refresh = None
+            return
         if self._ws is not None and not self._ws.closed:
             self.hass.async_create_task(self._request_rms_state())
 
@@ -349,6 +435,8 @@ class Tide16Coordinator:
         push notification (no need to keep re-requesting these)."""
         for endpoint in (
             "get_source_names",
+            "get_output_speakers",
+            "get_custom_out_port_names",
             "get_ip",
             "get_bluetooth_status",
             "get_stream_properties",
@@ -481,6 +569,64 @@ class Tide16Coordinator:
         if isinstance(data, dict):
             self.data["source_names"] = {k: v for k, v in data.items() if isinstance(v, str)}
 
+    def _apply_output_speakers(self, data) -> None:
+        """Which speaker each physical output is assigned to
+        (get_output_speakers), e.g. {"1": "LeftFront", ..., "11": "Sub2"}.
+
+        This is the real assignment, not an inference from
+        speaker_config: on a 7.2.2 setup the device returns exactly 11
+        entries and outputs 12-16 are simply absent from the map. That
+        distinction matters - an absent output is unassigned, which is
+        not the same as an assigned one that happens to be silent, and
+        both read -122.5 in the metering.
+
+        Keys are the same 1-based index _channels_db() sorts by, so the
+        two line up positionally without any further mapping.
+        """
+        if not isinstance(data, dict):
+            return
+        self._output_speakers = {
+            str(k): v for k, v in data.items() if isinstance(v, str) and v
+        }
+        self._rebuild_channel_names()
+
+    def _apply_custom_out_port_names(self, data) -> None:
+        """User-assigned output port names (get_custom_out_port_names).
+
+        Empty on a stock unit. When set, these are what the owner called
+        the port on the Tide16 itself, so they win over the stock
+        speaker name - same reasoning as _apply_source_names.
+        """
+        if not isinstance(data, dict):
+            return
+        self._custom_port_names = {
+            str(k): v for k, v in data.items() if isinstance(v, str) and v
+        }
+        self._rebuild_channel_names()
+
+    def _rebuild_channel_names(self) -> None:
+        """Flatten the two name sources into a positional list.
+
+        A list rather than a dict because it is consumed alongside
+        channel_db, which is already a positional list - handing a
+        dashboard two structures it has to correlate by key would just
+        move this join into every consumer. Unassigned outputs are None,
+        never a placeholder string, so a consumer can tell "no speaker
+        here" from "a speaker called something".
+        """
+        stock = getattr(self, "_output_speakers", {})
+        custom = getattr(self, "_custom_port_names", {})
+        if not stock and not custom:
+            return
+        count = max(
+            (int(k) for k in list(stock) + list(custom) if k.isdigit()),
+            default=0,
+        )
+        self.data["channel_names"] = [
+            custom.get(str(i)) or stock.get(str(i)) or None
+            for i in range(1, count + 1)
+        ]
+
     def _apply_bluetooth(self, data) -> None:
         if not isinstance(data, dict):
             return
@@ -550,7 +696,9 @@ class Tide16Coordinator:
 
     def _apply_rms_block_db(self, data) -> None:
         if isinstance(data, dict):
-            self.data["signal_peak_db"] = _peak_db(data.get("out"))
+            out = data.get("out")
+            self.data["signal_peak_db"] = _peak_db(out)
+            self.data["channel_db"] = _channels_db(out)
 
     def _set_connected(self, connected: bool, status: str) -> None:
         self.data["connected"] = connected

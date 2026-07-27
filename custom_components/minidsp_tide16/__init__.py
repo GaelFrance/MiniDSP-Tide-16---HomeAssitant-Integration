@@ -63,7 +63,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 
 from .const import CONF_HOST, CONF_PORT, DEFAULT_PORT, DOMAIN
@@ -112,6 +112,34 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+SERVICE_REQUEST_FAST_METERING = "request_fast_metering"
+
+
+@callback
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register the fast-metering keepalive service (v22).
+
+    The front-panel card calls this on a short repeat while its bar meter
+    is visible, to temporarily raise the RMS poll rate (see
+    coordinator.async_request_fast_metering). It is intentionally a plain
+    service with no target: there is only ever one Tide16, and making the
+    card resolve an entity_id or device_id just to ask "please meter
+    faster" would buy nothing. Every loaded coordinator gets the request.
+
+    Registered once - has_service() guards against re-registering when a
+    second entry is added or an entry is reloaded.
+    """
+    if hass.services.has_service(DOMAIN, SERVICE_REQUEST_FAST_METERING):
+        return
+
+    @callback
+    def _handle(call) -> None:
+        for coordinator in hass.data.get(DOMAIN, {}).values():
+            coordinator.async_request_fast_metering()
+
+    hass.services.async_register(DOMAIN, SERVICE_REQUEST_FAST_METERING, _handle)
+
+
 async def _async_preload_platforms(hass: HomeAssistant) -> None:
     """Import every platform module in Home Assistant's dedicated import
     executor thread, instead of letting async_forward_entry_setups()
@@ -149,6 +177,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # comes up, which takes at most a couple of seconds on a local
     # network - see entity.py.
     coordinator.async_connect()
+    _async_register_services(hass)
 
     return True
 
