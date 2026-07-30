@@ -13,7 +13,10 @@ minimal switch-like accessory) when it has `device_class` `tv` or
 ("increase/decrease the volume on the Tide") when the entity declares
 `MediaPlayerEntityFeature.VOLUME_STEP` and implements
 `async_volume_up`/`async_volume_down` - `VOLUME_SET` alone only gets you
-"set the Tide volume to N percent". `media_player.tide16` had neither.
+"set the Tide volume to N percent", and per Apple's own Receiver mapping
+even that (and mute) aren't guaranteed to be exposed as Siri commands
+regardless - see "HomeKit Bridge (Siri voice control)" in `README.md`.
+`media_player.tide16` had `VOLUME_SET` already, but not `VOLUME_STEP`.
 
 Changes, entirely inside `media_player.py`:
 

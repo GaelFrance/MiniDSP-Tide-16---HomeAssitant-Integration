@@ -137,14 +137,21 @@ expose it to Apple Home and Siri:
 5. Optional: rename the accessory to "Tide" in Apple Home, so Siri
    commands read naturally (see below).
 
-Once paired, Siri supports:
+Once paired, Siri reliably supports:
 
 - "Increase/decrease the volume on the Tide"
-- "Set the Tide volume to 60 percent"
-- "Mute/unmute the Tide"
 - "Turn off the Tide"
 - "Switch the Tide to Spotify" / "...to Apple TV" (any source name from
   `source_list`)
+
+Depending on the Apple Home/Siri version and device, absolute-volume and
+mute voice commands may not be exposed for Receiver accessories. Volume
+increase/decrease and source selection are the capabilities explicitly
+supported by Home Assistant's HomeKit Receiver mapping - "set the Tide
+volume to 60 percent" and "mute/unmute the Tide" may or may not work as
+voice commands depending on your setup, even though `media_player.tide16`
+itself supports `VOLUME_SET` and `VOLUME_MUTE` (usable from the Home app's
+accessory tile, and from Home Assistant directly, regardless of Siri).
 
 **Not supported, on purpose:**
 
