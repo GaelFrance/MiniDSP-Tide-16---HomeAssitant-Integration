@@ -4,6 +4,66 @@ Full version history of the miniDSP Tide16 integration, from the very
 first cut (reverse-engineered against the stock site) to today. For the
 current state (features, installation, entities), see `README.md`.
 
+## v29: media_player.tide16 classified as a receiver, native volume stepping for HomeKit/Siri
+
+Home Assistant's HomeKit Bridge only exposes a `media_player` as a
+controllable accessory (rather than skipping it, or mapping it to a
+minimal switch-like accessory) when it has `device_class` `tv` or
+`receiver`, and Siri only gets plain-language volume commands
+("increase/decrease the volume on the Tide") when the entity declares
+`MediaPlayerEntityFeature.VOLUME_STEP` and implements
+`async_volume_up`/`async_volume_down` - `VOLUME_SET` alone only gets you
+"set the Tide volume to N percent". `media_player.tide16` had neither.
+
+Changes, entirely inside `media_player.py`:
+
+- `_attr_device_class = MediaPlayerDeviceClass.RECEIVER` (the real Home
+  Assistant enum, not a string literal).
+- `MediaPlayerEntityFeature.VOLUME_STEP` added to `_attr_supported_features`.
+- `async_volume_up()` / `async_volume_down()` added. Both delegate
+  straight to `coordinator.async_nudge_volume(+/-VOLUME_STEP_DB)` - the
+  exact same coordinator method (and the same `VOLUME_STEP_DB` constant)
+  `button.tide16_volume_up`/`button.tide16_volume_down` already call.
+  Nothing about the accumulated-pending-volume behavior fixed at v19/v20
+  (see those entries below) was reimplemented or forked: a Siri command,
+  a dashboard button press, and rapid repeats of either now all
+  accumulate through the one shared `_pending_volume_db` mechanism in
+  `coordinator.py`, since they're all just callers of the same method on
+  the same coordinator instance. No second lock, no new WebSocket
+  command.
+
+Deliberately NOT changed:
+
+- **No `TURN_ON`.** The Tide16 has no network wake path on current
+  firmware (see "Waking from standby" below) - adding `TURN_ON` without
+  a real way to act on it would just make Siri/HomeKit's "turn on the
+  Tide" fail silently or lie about the result.
+- **No `PLAY`/`PAUSE`/`STOP`.** The Tide16 is an audio processor/receiver,
+  not the playback source - those controls belong to whatever's actually
+  playing (Spotify, Apple TV, a streamer...), not to this entity.
+- **No `volume_step` property.** It turns out this isn't actually part of
+  `MediaPlayerEntity`'s public API (the only hit for that name in Home
+  Assistant core is an unrelated per-integration config field on the
+  `vizio` integration) - so it was left out rather than adding a
+  property Home Assistant doesn't read.
+- **The linear-over-dB-range `volume_level` mapping (v22/v23), mute,
+  source selection/disambiguation, and the on/off-via-connection-state
+  design (see "Known limitations" and "Waking from standby") are all
+  unchanged.** `unique_id` (`minidsp_tide16_media_player_v2`) and
+  `entity_id` (`media_player.tide16`) are unchanged too - this is the
+  same entity, not a new one.
+
+A `tests/` directory was added (new to this repo) with focused pytest
+coverage for everything above: device class, supported/excluded
+features, delegation to the coordinator, the accumulated-volume behavior
+itself (driven through the real `Tide16Coordinator`, not a mock - see
+`tests/test_media_player.py`), volume clamping at -127.5/0.0 dB, and
+source selection/disambiguation. See that file's module docstring for
+why it doesn't depend on `pytest-homeassistant-custom-component`.
+
+See "HomeKit Bridge (Siri voice control)" below for how to expose
+`media_player.tide16` to Apple Home once you've updated.
+
 ## v28: published on GitHub
 
 Repository scaffolding added for the public GitHub repo

@@ -42,12 +42,35 @@ expecting the old scale.
 The now-unused linear-gain plumbing (volume_linear, get_volume,
 async_set_volume_linear) has been removed from coordinator.py - nothing
 else in this integration ever used it.
+
+v29: classified as MediaPlayerDeviceClass.RECEIVER and given native
+VOLUME_STEP support (async_volume_up/async_volume_down), so Home
+Assistant's HomeKit Bridge exposes this entity as an AV receiver
+accessory and Siri can drive it with plain-language volume commands
+("increase/decrease the volume on the Tide"), not just "set volume to
+N%". Both new methods delegate to the coordinator's existing
+async_nudge_volume() - the same method button.tide16_volume_up/down
+already call - so a Siri/HomeKit volume-up press, a dashboard button
+press, and rapid repeated presses from either all accumulate through the
+exact same pending-volume-target bookkeeping (see async_nudge_volume's
+docstring in coordinator.py). No WebSocket command is built here, and no
+new lock is introduced. TURN_ON is deliberately still not implemented -
+see "Waking from standby" in README.md; the Tide16 has no network wake
+path on current firmware. PLAY/PAUSE/STOP are also deliberately absent -
+the Tide16 is an audio processor/receiver, not the playback source, so
+those controls belong to whatever's actually playing (Spotify, Apple TV,
+a streamer...), not to this entity. No `volume_step` property was added:
+it isn't part of MediaPlayerEntity's actual public API (only a same-named
+config field in an unrelated integration uses that name) - the real step
+size is simply whatever async_volume_up/async_volume_down send, in dB,
+via the coordinator.
 """
 from __future__ import annotations
 
 import logging
 
 from homeassistant.components.media_player import (
+    MediaPlayerDeviceClass,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -56,7 +79,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, MAX_VOLUME_DB, MIN_VOLUME_DB, SOURCE_ID_TO_LABEL, SOURCE_LABEL_TO_ID
+from .const import (
+    DOMAIN,
+    MAX_VOLUME_DB,
+    MIN_VOLUME_DB,
+    SOURCE_ID_TO_LABEL,
+    SOURCE_LABEL_TO_ID,
+    VOLUME_STEP_DB,
+)
 from .entity import Tide16Entity
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,8 +102,14 @@ async def async_setup_entry(
 class Tide16MediaPlayer(Tide16Entity, MediaPlayerEntity):
     _attr_name = None  # represents the device itself -> entity_id media_player.tide16
     _attr_unique_id = "minidsp_tide16_media_player_v2"
+    # v29: RECEIVER (not the generic default) is what tells Home
+    # Assistant's HomeKit Bridge to expose this as an AV receiver
+    # accessory instead of skipping/mis-typing it - HomeKit accessory
+    # mode requires a media_player with device_class tv or receiver.
+    _attr_device_class = MediaPlayerDeviceClass.RECEIVER
     _attr_supported_features = (
         MediaPlayerEntityFeature.VOLUME_SET
+        | MediaPlayerEntityFeature.VOLUME_STEP
         | MediaPlayerEntityFeature.VOLUME_MUTE
         | MediaPlayerEntityFeature.SELECT_SOURCE
         | MediaPlayerEntityFeature.TURN_OFF
@@ -172,6 +208,18 @@ class Tide16MediaPlayer(Tide16Entity, MediaPlayerEntity):
         volume = max(0.0, min(1.0, volume))
         db = MIN_VOLUME_DB + volume * (MAX_VOLUME_DB - MIN_VOLUME_DB)
         await self._coordinator.async_set_volume_db(db)
+
+    async def async_volume_up(self) -> None:
+        # v29: same coordinator method, and the same VOLUME_STEP_DB
+        # constant, that button.tide16_volume_up already uses - so a
+        # Siri/HomeKit "volume up", a dashboard button press, and rapid
+        # repeats of either accumulate through the one shared
+        # pending-volume-target mechanism in coordinator.py instead of
+        # each entity tracking its own state.
+        await self._coordinator.async_nudge_volume(VOLUME_STEP_DB)
+
+    async def async_volume_down(self) -> None:
+        await self._coordinator.async_nudge_volume(-VOLUME_STEP_DB)
 
     async def async_mute_volume(self, mute: bool) -> None:
         await self._coordinator.async_set_mute(mute)

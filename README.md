@@ -67,7 +67,10 @@ consider cleaning up orphaned entities (see below).
 - `sensor.tide16_ip_address` (diagnostic - not in the bundled
   dashboards, but visible in the entity list)
 - `media_player.tide16` (volume, mute, source, power off - in addition
-  to the buttons above, not instead of them)
+  to the buttons above, not instead of them). Classified as
+  `MediaPlayerDeviceClass.RECEIVER` with native volume-step support, so
+  HomeKit Bridge/Siri recognize it as an AV receiver - see "HomeKit
+  Bridge (Siri voice control)" below.
 - `binary_sensor.tide16_audio_signal` (audio-signal detection)
 - `binary_sensor.tide16_dirac_measuring` (Dirac measurement in progress)
 
@@ -112,6 +115,47 @@ through "Ch16"...):
 4. In the dialog that opens, click the gear icon (⚙️) top right, then
    "Delete" at the bottom.
 
+## HomeKit Bridge (Siri voice control)
+
+`media_player.tide16` is classified as `MediaPlayerDeviceClass.RECEIVER`
+specifically so Home Assistant's own **HomeKit Bridge** integration (not
+this integration - Home Assistant requires a `media_player` with device
+class `tv` or `receiver` to expose it in HomeKit accessory mode) can
+expose it to Apple Home and Siri:
+
+1. Settings > Devices & services > Add integration > search for
+   "HomeKit Bridge".
+2. When asked which entities to include, choose the "Include" mode and
+   add only `media_player.tide16` (a broad "include everything" bridge
+   works too, but a dedicated one keeps the Tide16 as its own accessory).
+3. Set the bridge's mode to "Accessory" (not "Bridge") so the Tide16
+   shows up as a single, direct AV receiver accessory rather than folded
+   into a multi-accessory bridge.
+4. Finish the wizard - Home Assistant shows a QR code / setup code. Open
+   the Apple Home app > "+" > "Add Accessory" > scan it (or enter the
+   code manually).
+5. Optional: rename the accessory to "Tide" in Apple Home, so Siri
+   commands read naturally (see below).
+
+Once paired, Siri supports:
+
+- "Increase/decrease the volume on the Tide"
+- "Set the Tide volume to 60 percent"
+- "Mute/unmute the Tide"
+- "Turn off the Tide"
+- "Switch the Tide to Spotify" / "...to Apple TV" (any source name from
+  `source_list`)
+
+**Not supported, on purpose:**
+
+- **Turning the Tide16 on via Siri/HomeKit.** See "Waking from standby"
+  below - current firmware has no network wake path, so this entity
+  doesn't claim `TURN_ON`.
+- **"Play"/"pause"/"stop" the Tide.** The Tide16 processes and amplifies
+  audio, it doesn't play it - those commands belong to whatever's
+  actually the source (Spotify, Apple TV, a streamer...), not to this
+  entity.
+
 ## Known limitations
 
 - **Only one WebSocket client at a time (observed, not officially
@@ -133,3 +177,8 @@ Issues and pull requests are welcome. See `CHANGELOG.md` for the
 reasoning behind past decisions before proposing a change to behavior
 that was deliberately chosen (e.g. the optimistic-update removal at v17,
 or the single-instance design).
+
+`tests/` has focused pytest coverage for `media_player.tide16` (device
+class, supported features, volume delegation/accumulation, source
+selection). Run with `pip install pytest pytest-asyncio homeassistant`
+then `pytest` from the repo root.
