@@ -66,9 +66,9 @@ assigned and the legend names them; yours will show your own layout.*
 
 | | |
 |---|---|
-| `custom_components/tide16/` | The integration: a WebSocket client for the Tide16, every entity the panel needs, and the card itself |
-| `custom_components/tide16/api/` | The protocol on its own, with no Home Assistant imports - runnable from a terminal |
-| `custom_components/tide16/frontend/` | The cards - `custom:tide16-panel` and `custom:tide16-mini` - plus the nine `picture-elements` elements it is built from, the plate and the glyphs.  Served by the integration at `/tide16_static/` |
+| `custom_components/minidsp_tide16/` | The integration: a WebSocket client for the Tide16, every entity the panel needs, and the card itself |
+| `custom_components/minidsp_tide16/api/` | The protocol on its own, with no Home Assistant imports - runnable from a terminal |
+| `custom_components/minidsp_tide16/frontend/` | The cards - `custom:tide16-panel` and `custom:tide16-mini` - plus the nine `picture-elements` elements it is built from, the plate and the glyphs.  Served by the integration at `/tide16_static/` |
 | `lovelace/tide16-panel.yaml` | An example view, for the dedicated full-page look.  Not needed to use the card |
 | `docs/panel-layout.annotated.yaml` | Where every element box on the plate is measured and explained.  The card carries the same geometry as data; `tools/build_layout.py` writes it and `tools/check_layout_sync.py` proves the two agree |
 
@@ -76,7 +76,7 @@ assigned and the legend names them; yours will show your own layout.*
 
 **One thing, from HACS.**
 
-1. HACS > ⋮ > Custom repositories > `https://github.com/speedtoys/Minidsp-Tide16-ControlCard`, type **Integration**.  Download it and restart.
+1. HACS > ⋮ > Custom repositories > `https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration`, type **Integration**.  Download it and restart.
 2. Settings > Devices & services > Add integration > **miniDSP Tide16**.  It sweeps your subnet and offers whatever answers as a Tide16 - pick it, or type an address.
 3. On any dashboard: Edit > Add card > **miniDSP Tide16 Panel**.
 
@@ -134,33 +134,10 @@ The scan lives in the Home-Assistant-free API layer, so it runs from a
 terminal too:
 
 ```
-cd custom_components/tide16
+cd custom_components/minidsp_tide16
 python3 -m api --scan              # this machine's subnet
 python3 -m api --scan 10.0.0.0/24  # another one
 ```
-
-### Upgrading from v1.x
-
-v1 was a dashboard card that needed
-[@GaelFrance's integration](https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration)
-plus a patch, three python scripts, a package of template sensors and
-five stanzas of `configuration.yaml`.  v2 replaced all of it.
-
-1. Remove the old HACS entry (it was type **Dashboard**) and add the repo again as an **Integration**.
-2. Delete the old config entry for `minidsp_tide16`, then its `custom_components/minidsp_tide16/` folder.
-3. Delete `packages/tide16_panel.yaml`, `scripts/tide16_*.py`, the `command_line` and `shell_command` stanzas, the `recorder:` exclusion for `sensor.tide16_channel_levels`, and the `/local/tide16/` resource row.
-4. Add this integration and take the new view.
-
-Do the removals **before** adding this integration, or Home Assistant will
-hand the new entities `_2` suffixes because the old registry rows still
-hold the names.  Entity ids are otherwise unchanged - `sensor.tide16_status`,
-`number.tide16_volume` and the rest are the same names, so recorder history
-carries straight over.
-
-The one entity that does not come back is `sensor.tide16_channel_levels`.
-Sixteen floats four times a second was never state worth storing; the meter
-subscribes to them over the websocket now, which is also why the recorder
-exclusion is gone.
 
 ## The elements
 
@@ -802,43 +779,45 @@ playing at all.  Only the metering moving proves playback.
 
 ## Credits and licensing
 
-The integration, the card, the Lovelace view and the plate edits are
-original work, MIT licensed.  The WebSocket client was written against
-miniDSP's published API and a recorded session with the hardware; no code
-from any other implementation is in it.
+Version 1.0.0 is built on **[speedtoys](https://github.com/speedtoys)'s
+[Minidsp-Tide16-ControlCard](https://github.com/speedtoys/Minidsp-Tide16-ControlCard)**
+2.6.3 (MIT): the WebSocket client, the settings table, most of the
+entities, discovery, the options flow, the front-panel card and its art
+are speedtoys' work. Many thanks to speedtoys for it. ControlCard itself
+started as a card on top of minidsp_tide16 0.x; 1.0.0 brings the two back
+together under the `minidsp_tide16` domain, with the entity identities,
+volume stepping, HomeKit receiver and volume-compensated signal detection
+of 0.x. See [NOTICE](NOTICE) and [LICENSE](LICENSE).
 
-Through v1.x this repo was a card that sat on top of
-[@GaelFrance's integration](https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration)
-(MIT), with a patch for the metering and scene endpoints it did not
-reach.  That is where this panel started, and the debt is worth stating
-plainly even though v2 no longer depends on it.
+The code is MIT licensed. The WebSocket client was written against
+miniDSP's published API and a recorded session with the hardware.
 
 ### Image assets - what the MIT grant does NOT cover
 
 See [`NOTICE`](NOTICE) for the full statement.  In short: **the MIT
 license covers the source code and the two pieces of original artwork** -
-`custom_components/tide16/**/*.py`, the card JS, `lovelace/`, `tools/`,
+`custom_components/minidsp_tide16/**/*.py`, the card JS, `lovelace/`, `tools/`,
 the brand icon and `sun.svg`.  It grants no rights in the other images.
 
 Those depict the device this card controls and the formats it decodes.
 The front panel was built from miniDSP's Tide16 documentation images, and
 the badges and glyphs carry third-party marks.  Rights stay with their
 owners.  If you hold rights in any of them and want them removed,
-[open an issue](https://github.com/speedtoys/Minidsp-Tide16-ControlCard/issues)
+[open an issue](https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration/issues)
 and they will be replaced.
 
 | File | What it is | Status |
 |---|---|---|
-| `custom_components/tide16/frontend/plate-v3.png` | The front-panel artwork, built from miniDSP's Tide16 documentation images, stripped of its baked-in readings so live values can be painted back on, and with the "Program" and "Listening" labels the shipping firmware never shows painted out | Derived from miniDSP material.  **Not MIT** |
-| `custom_components/tide16/frontend/badge-dolby-audio.png`, `…/badge-dolby-atmos.png`, `…/badge-dtsx.png` | The decoder lockups shown along the bottom strip, keyed to white on transparency | Dolby and DTS marks.  **Not MIT** |
-| `custom_components/tide16/frontend/dolby.png` | The Dolby double-D, used as the word "Dolby" in the profile heading, keyed off its background and recoloured | Dolby mark.  **Not MIT** |
-| `custom_components/tide16/frontend/dolby-atmos.png` | The Dolby Atmos lockup shown in the LCD when Atmos is decoding | Dolby mark.  **Not MIT** |
-| `custom_components/tide16/frontend/dirac-white.png` | The circled Dirac mark, in the white the hardware uses | Dirac mark.  **Not MIT** |
-| `custom_components/tide16/frontend/bt.png` | The Bluetooth mark on the pairing control, background-stripped and recoloured | Bluetooth SIG mark.  **Not MIT** |
-| `custom_components/tide16/frontend/swu.png` | The firmware-update badge - circling arrows over a progress bar and "UPDATE", keyed to transparency | Third-party art.  **Not MIT** |
-| `custom_components/tide16/frontend/reboot.png`, `…/power.png` | The reboot and standby glyphs, recoloured and cropped to match each other | Third-party icon art.  **Not MIT** |
-| `custom_components/tide16/frontend/sun.svg` | The sun glyph: a circle and eight rays, plain geometry | **Original work.  MIT, like the code** |
-| `custom_components/tide16/brand/icon.png`, `…/icon@2x.png` | The brand icon: a seven-bar level meter, drawn from scratch by `tools/make_brand_icon.py` in the card's own palette | **Original work.  MIT, like the code** |
+| `custom_components/minidsp_tide16/frontend/plate-v3.png` | The front-panel artwork, built from miniDSP's Tide16 documentation images, stripped of its baked-in readings so live values can be painted back on, and with the "Program" and "Listening" labels the shipping firmware never shows painted out | Derived from miniDSP material.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/badge-dolby-audio.png`, `…/badge-dolby-atmos.png`, `…/badge-dtsx.png` | The decoder lockups shown along the bottom strip, keyed to white on transparency | Dolby and DTS marks.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/dolby.png` | The Dolby double-D, used as the word "Dolby" in the profile heading, keyed off its background and recoloured | Dolby mark.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/dolby-atmos.png` | The Dolby Atmos lockup shown in the LCD when Atmos is decoding | Dolby mark.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/dirac-white.png` | The circled Dirac mark, in the white the hardware uses | Dirac mark.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/bt.png` | The Bluetooth mark on the pairing control, background-stripped and recoloured | Bluetooth SIG mark.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/swu.png` | The firmware-update badge - circling arrows over a progress bar and "UPDATE", keyed to transparency | Third-party art.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/reboot.png`, `…/power.png` | The reboot and standby glyphs, recoloured and cropped to match each other | Third-party icon art.  **Not MIT** |
+| `custom_components/minidsp_tide16/frontend/sun.svg` | The sun glyph: a circle and eight rays, plain geometry | **Original work.  MIT, like the code** |
+| `custom_components/minidsp_tide16/brand/icon.png`, `…/icon@2x.png` | The brand icon: a seven-bar level meter, drawn from scratch by `tools/make_brand_icon.py` in the card's own palette | **Original work.  MIT, like the code** |
 | `docs/screenshot.png` | A render of the running card | Contains every mark above.  **Not MIT** |
 
 Recolouring, cropping and background-stripping are edits, not authorship:
