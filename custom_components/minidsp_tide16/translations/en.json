@@ -2,28 +2,53 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to your miniDSP Tide16",
-        "description": "Enter the Tide16's hostname or IP address on your local network (e.g. minidsp-tide.local or 192.168.1.50).",
+        "title": "miniDSP Tide16",
+        "description": "{found}",
         "data": {
-          "host": "Host or IP address",
+          "host": "Host",
           "port": "Port"
+        },
+        "data_description": {
+          "host": "Pick a unit found on this network, or type an IP address or hostname.",
+          "port": "The Tide16's WebSocket port. Leave this alone unless you have changed it on the unit."
         }
       },
       "reconfigure": {
         "title": "Update miniDSP Tide16 connection",
-        "description": "Change the hostname or IP address if the Tide16 moved on your network.",
+        "description": "Change the address if the Tide16 moved on your network.",
         "data": {
-          "host": "Host or IP address",
+          "host": "Host",
           "port": "Port"
         }
       }
     },
     "error": {
-      "cannot_connect": "Couldn't connect to a Tide16 at that address. Check the host/IP and that it's powered on."
+      "cannot_connect": "No answer from that address. The Tide16 leaves the network in standby, so wake it and try again."
     },
     "abort": {
-      "single_instance_allowed": "Only one miniDSP Tide16 can be configured.",
-      "reconfigure_successful": "The connection settings were updated."
+      "already_configured": "This Tide16 is already set up.",
+      "reconfigure_successful": "The connection settings were updated.",
+      "single_instance_allowed": "Only one miniDSP Tide16 can be configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Audio detection and updates",
+        "description": "The output meters are measured after the master volume, so Audio Signal compares the programme level (peak minus volume) to a threshold. If it turns off during quiet passages, lower that threshold; if it never turns off, raise it.",
+        "data": {
+          "signal_relative_level": "Programme level counted as signal",
+          "silence_level": "Fallback level while the volume is unknown",
+          "silence_hold": "Report silence after",
+          "update_check": "Check for firmware updates every hour"
+        },
+        "data_description": {
+          "signal_relative_level": "Peak output level minus the master volume. -60 dB keeps quiet classical music detected at low volume.",
+          "silence_level": "Used only until the unit has reported its volume. Run the \"Measure output level\" action with nothing playing to see your noise floor.",
+          "silence_hold": "How long nothing may be heard before Audio Signal turns off. Audio starting is reported immediately.",
+          "update_check": "Off by default: while it checks, the unit reports \"Reaching update server...\" for up to a minute. The Check for update button asks on demand."
+        }
+      }
     }
   }
 }

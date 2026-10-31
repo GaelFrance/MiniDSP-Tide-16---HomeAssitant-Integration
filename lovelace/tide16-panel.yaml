@@ -1,0 +1,28 @@
+# The Tide16 front panel as a dedicated full-page view.
+#
+# YOU PROBABLY DO NOT NEED THIS FILE. Install the integration from HACS, add
+# it from Settings > Devices & services, then on any dashboard use
+# Edit > Add card > "miniDSP Tide16 Panel". It works in a normal view, in a
+# section of a sections view, or in a panel view - the card asks a sections
+# view for the full width, because the plate is very nearly 5:1 and a
+# default-width section would letterbox it.
+#
+# This file is only the dedicated view the repo's screenshot was taken on.
+# Paste it into a YAML dashboard's `views:` list, or into the raw
+# configuration editor of a storage-mode dashboard.
+#
+# v2.1.0 moved the thousand lines of measured element boxes that used to
+# live here into the card itself. The derivation - what every percentage was
+# anchored to on the artwork, and why - is kept in
+# `docs/panel-layout.annotated.yaml`, which is a record, not an install step.
+  - title: Tide16
+    path: tide16
+    icon: mdi:audio-video
+    type: panel
+    cards:
+      - type: custom:tide16-panel
+        # A panel view gives a card the whole window, and the plate at full
+        # width is more than the eye takes in at once; 0.75 is the size the
+        # screenshot was taken at. Leave `scale` out anywhere else - a
+        # section has already decided how wide the card is.
+        scale: 0.75

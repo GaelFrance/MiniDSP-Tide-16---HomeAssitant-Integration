@@ -3,10 +3,12 @@
   "name": "miniDSP Tide16",
   "codeowners": ["@GaelFrance"],
   "config_flow": true,
+  "dependencies": ["frontend", "http", "network", "websocket_api"],
   "documentation": "https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration",
-  "issue_tracker": "https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration/issues",
+  "integration_type": "device",
   "iot_class": "local_push",
+  "issue_tracker": "https://github.com/GaelFrance/MiniDSP-Tide-16---HomeAssitant-Integration/issues",
   "requirements": [],
-  "version": "0.29.0",
-  "single_config_entry": true
+  "single_config_entry": true,
+  "version": "1.0.0"
 }

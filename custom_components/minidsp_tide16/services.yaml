@@ -1,0 +1,60 @@
+volume_step:
+  name: Volume step
+  description: >-
+    Add a relative number of dB to the master volume, clamped to the unit's
+    -127.5 .. 0 dB range. Server-side because a dashboard tap carries literal
+    data and cannot read the current level to add to it.
+  fields:
+    delta:
+      name: Delta
+      description: dB to add (negative to cut).
+      required: true
+      example: -5
+      selector:
+        number:
+          min: -60
+          max: 60
+          step: 0.5
+          mode: box
+
+measure_output_level:
+  name: Measure output level
+  description: >-
+    Watch the outputs for a few seconds and report what they are doing - peak,
+    median, the quietest level seen, and how that sits against the current
+    silence threshold. Run it with nothing playing to find your system's own
+    noise floor, which is the number the Audio Signal threshold has to clear.
+  fields:
+    duration:
+      name: Duration
+      description: How many seconds to sample for.
+      required: false
+      default: 10
+      example: 10
+      selector:
+        number:
+          min: 1
+          max: 120
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+
+set_preset:
+  name: Set preset
+  description: >-
+    Recall a filter preset by its id - the number the unit knows it by,
+    regardless of what the preset has been named. Naming a preset in Device
+    Console rewrites the options on the Filter Preset select, which makes
+    select.select_option reject the number an automation stored; this takes
+    the id and is unaffected by a rename.
+  fields:
+    preset:
+      name: Preset
+      description: >-
+        The preset id, as shown by the Preset ID sensor. Ids are the unit's
+        own and are not always contiguous - a system can answer 1 and 3 to 12
+        with no 2.
+      required: true
+      example: 2
+      selector:
+        text:

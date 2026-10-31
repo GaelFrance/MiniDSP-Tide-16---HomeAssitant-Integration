@@ -1,0 +1,31 @@
+name: HACS
+
+# The validation the HACS default store runs against a submission. It has to
+# pass with no errors and no ignores, so nothing is ignored here - a failure
+# is the answer, not something to silence.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Daily: most of what this checks lives on the GitHub side of the repo
+    # (description, topics, releases, the brands entry), so it can start
+    # failing without a commit.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+# Neither validation writes anything - they read the repo and report.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
