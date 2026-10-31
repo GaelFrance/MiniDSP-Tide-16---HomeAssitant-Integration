@@ -1,201 +1,342 @@
-"""Config flow for the miniDSP Tide16 integration.
+"""Set the Tide16 up from the UI.
 
-Three entry points:
-  - async_step_user: manually add a Tide16 from the UI (Settings >
-    Devices & services > Add integration > miniDSP Tide16).
-  - async_step_import: one-time automatic migration from the legacy YAML
-    config (`minidsp_tide16: host: ...`) - triggered by __init__.py's
-    async_setup() whenever it finds that key in configuration.yaml. Not
-    shown to the user; the migrated-successfully notification is fired
-    exactly once, right here, at the moment the entry is actually
-    created - not from __init__.py's async_setup_entry(), which runs on
-    every single startup/reload of the entry and would otherwise re-fire
-    it forever (a real bug in the first cut of this file, per a second
-    independent review - thank you).
-  - async_step_reconfigure: change the host/IP of the already-configured
-    Tide16 without deleting and recreating the integration (Settings >
-    Devices & services > miniDSP Tide16 > ⋮ > Reconfigure).
+The unit announces itself nowhere - measured on a live one, it answers no
+SSDP, advertises no mDNS service, and its only name on a network is whatever
+that network's DHCP server decided to call it, which is a fact about the
+network rather than the device. So there is nothing for Home Assistant's own
+discovery to catch, and this goes looking instead: one port across the local
+subnet, then a WebSocket handshake to confirm that whatever answered really is
+a Tide16 and not something else that happens to listen on 5555.
 
-v19: this integration only ever supports ONE Tide16 (see manifest.json's
-"single_config_entry": true, which makes Home Assistant itself refuse a
-second "Add integration" attempt). Earlier this used the host string as
-the config entry's unique_id to prevent duplicates - which sounds
-reasonable but is actually wrong for two reasons a review caught: (1)
-"single_config_entry" already does that job, at the HA level, without
-needing a fake per-entry identity at all; (2) a host isn't a stable
-identity - reconfiguring the IP would silently leave a stale, misleading
-unique_id behind, since updating it wasn't wired up. Replaced with a
-plain "is there already an entry?" guard (_async_current_entries()) in
-both async_step_user and async_step_import, and no config-entry-level
-unique_id at all - it isn't needed for a deliberately single-instance
-integration.
-
-Also new in v19: async_step_user and async_step_reconfigure both
-actually try to connect before accepting the form, so a typo'd IP or
-wrong port surfaces immediately as a "can't connect" error instead of
-silently creating (or worse, reconfiguring into) a non-working entry.
-async_step_import deliberately skips this check - the Tide16 may
-legitimately be off/asleep at the moment Home Assistant starts, and that
-shouldn't block migrating an otherwise-correct YAML config.
-
-v20 fixes (a follow-up review, credited in CHANGELOG.md):
-  - _test_connection() used to just open and immediately close a
-    WebSocket - that only proves *something* is listening on that port,
-    not that it's actually a Tide16. It now sends a real
-    get_coordinator_status request (the same endpoint the coordinator
-    itself uses to confirm readiness on connect) and checks for a
-    status: "OK" reply before accepting the form.
-  - async_step_reconfigure now skips the connectivity test entirely when
-    the submitted host/port are identical to the entry's current ones.
-    The README documents that the Tide16 only accepts one WebSocket
-    client at a time - the running coordinator already holds that slot,
-    so a second test connection to the SAME address could plausibly be
-    refused by the device itself, turning a no-op "reconfigure" into a
-    spurious "cannot_connect" error. A change to a genuinely different
-    address is still tested normally, since that's a different
-    destination the coordinator isn't currently connected to.
-
-None of this touches entity unique_id/entity_id (button.tide16_shutdown,
-minidsp_tide16_volume, etc.), which live entirely in the platform files -
-that separation is what keeps existing automations and dashboards
-working across the YAML-to-config-entry migration.
+Typing an address by hand is always available. The sweep is bounded to a small
+subnet, and a unit in standby leaves the network entirely - so "nothing found"
+is a perfectly ordinary answer that has to lead somewhere useful.
 """
+
 from __future__ import annotations
 
-import asyncio
+import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
-from homeassistant import config_entries
-from homeassistant.components import persistent_notification
-from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import config_validation as cv
+from homeassistant.components import network
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-from .const import CONF_HOST, CONF_PORT, DEFAULT_PORT, DOMAIN
-
-_MIGRATION_NOTIFICATION = (
-    "miniDSP Tide16 was migrated from YAML to a config entry "
-    "(Settings > Devices & services > miniDSP Tide16). You can now "
-    "remove the `minidsp_tide16:` section from configuration.yaml and "
-    "restart Home Assistant whenever convenient - all entities, "
-    "automations, and dashboards keep working unchanged."
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 
+from .api import Tide16Client, Tide16Error, async_scan, candidate_hosts
+from .api.const import DEFAULT_PORT
+from .const import (
+    CONF_HOST,
+    CONF_PORT,
+    CONF_SIGNAL_RELATIVE,
+    CONF_SILENCE_HOLD,
+    CONF_SILENCE_LEVEL,
+    CONF_UPDATE_CHECK,
+    DEFAULT_SIGNAL_RELATIVE,
+    DEFAULT_SILENCE_HOLD,
+    DEFAULT_SILENCE_LEVEL,
+    DEFAULT_UPDATE_CHECK,
+    DEVICE_NAME,
+    DOMAIN,
+    MAX_SIGNAL_RELATIVE,
+    MAX_SILENCE_HOLD,
+    MAX_SILENCE_LEVEL,
+    MIN_SIGNAL_RELATIVE,
+    MIN_SILENCE_HOLD,
+    MIN_SILENCE_LEVEL,
+)
 
-def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
-    defaults = defaults or {}
-    return vol.Schema(
-        {
-            vol.Required(CONF_HOST, default=defaults.get(CONF_HOST)): cv.string,
-            vol.Optional(CONF_PORT, default=defaults.get(CONF_PORT, DEFAULT_PORT)): cv.port,
-        }
-    )
-
-
-async def _test_connection(hass, host: str, port: int) -> bool:
-    """Open a WebSocket connection and ask get_coordinator_status,
-    confirming an actual Tide16 replied (status "OK") rather than just
-    some unrelated WebSocket server on that port - before creating or
-    updating a config entry with it.
-
-    Reads up to a few messages rather than just the first one: in theory
-    an unsolicited notification could arrive before our request's reply
-    does, and skipping straight past that would wrongly report
-    "cannot_connect" on a perfectly healthy Tide16.
-    """
-    session = async_get_clientsession(hass)
-    try:
-        async with asyncio.timeout(5):
-            async with session.ws_connect(f"ws://{host}:{port}") as ws:
-                await ws.send_json({"endpoint": "get_coordinator_status"})
-                for _ in range(5):
-                    msg = await ws.receive()
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        return False
-                    payload = msg.json()
-                    if not isinstance(payload, dict):
-                        continue
-                    if payload.get("req") == "get_coordinator_status":
-                        return payload.get("status") == "OK"
-                    # else: probably an unsolicited notification - keep
-                    # waiting for the actual reply to our request.
-    except Exception:  # noqa: BLE001 - any failure here just means "can't connect"
-        return False
-    return False
+_LOGGER = logging.getLogger(__name__)
 
 
-class Tide16ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class Tide16ConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> Tide16OptionsFlow:
+        return Tide16OptionsFlow(config_entry)
 
+    def __init__(self) -> None:
+        self._found: list[dict[str, Any]] = []
+        self._scanned = False
+
+    async def _async_local_hosts(self) -> list[str]:
+        """Every address worth trying, taken from Home Assistant's own adapters.
+
+        Bounded by candidate_hosts(): a /24 is 254 addresses and sweeps in
+        about a second, a /16 is 65534 and is refused outright. On a network
+        that large the user types the address.
+        """
+        hosts: list[str] = []
+        try:
+            adapters = await network.async_get_adapters(self.hass)
+        except Exception:
+            _LOGGER.debug("could not read network adapters", exc_info=True)
+            return []
+
+        for adapter in adapters:
+            if not adapter.get("enabled"):
+                continue
+            for ip in adapter.get("ipv4", []):
+                address, prefix = ip.get("address"), ip.get("network_prefix")
+                if not address or prefix is None:
+                    continue
+                for host in candidate_hosts(f"{address}/{prefix}"):
+                    if host != address and host not in hosts:
+                        hosts.append(host)
+        return hosts
+
+    async def _async_search(self) -> None:
+        """Look once, on first entry to the form."""
+        if self._scanned:
+            return
+        self._scanned = True
+        hosts = await self._async_local_hosts()
+        if not hosts:
+            return
+        try:
+            self._found = await async_scan(
+                hosts, session=async_get_clientsession(self.hass)
+            )
+        except Exception:
+            _LOGGER.debug("scan failed", exc_info=True)
+            self._found = []
+        _LOGGER.debug("found %d Tide16(s) of %d addresses", len(self._found), len(hosts))
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        if user_input is not None:
-            host = user_input[CONF_HOST]
+
+        if user_input is None:
+            await self._async_search()
+        else:
+            host = str(user_input[CONF_HOST]).strip()
             port = user_input.get(CONF_PORT, DEFAULT_PORT)
-            if await _test_connection(self.hass, host, port):
+
+            # One unit per host: re-adding the same address should offer to
+            # reconfigure it rather than build a second set of entities.
+            await self.async_set_unique_id(f"{host}:{port}")
+            self._abort_if_unique_id_configured()
+
+            client = Tide16Client(host, port)
+            try:
+                await client.probe()
+            except Tide16Error:
+                # The unit answers on port 5555 only while it is awake, so this
+                # is as likely to mean "it is in standby" as "wrong address".
+                errors["base"] = "cannot_connect"
+            else:
                 return self.async_create_entry(
-                    title=f"miniDSP Tide16 ({host})",
-                    data={CONF_HOST: host, CONF_PORT: port},
+                    title=DEVICE_NAME, data={CONF_HOST: host, CONF_PORT: port}
                 )
-            errors["base"] = "cannot_connect"
 
-        return self.async_show_form(step_id="user", data_schema=_schema(), errors=errors)
+        configured = {
+            entry.data.get(CONF_HOST) for entry in self._async_current_entries()
+        }
+        options = [
+            SelectOptionDict(
+                value=found["host"],
+                label=(
+                    f"{found['host']} - Tide16"
+                    + (f" (firmware {found['version']})" if found.get("version") else "")
+                ),
+            )
+            for found in self._found
+            if found["host"] not in configured
+        ]
 
-    async def async_step_import(self, import_data: dict[str, Any]) -> FlowResult:
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
-
-        host = import_data[CONF_HOST]
-        port = import_data.get(CONF_PORT, DEFAULT_PORT)
-
-        # Fired here, once, exactly when the entry is actually created -
-        # NOT from async_setup_entry() (see the module docstring for why
-        # that was wrong).
-        persistent_notification.async_create(
-            self.hass,
-            _MIGRATION_NOTIFICATION,
-            title="miniDSP Tide16 migrated",
-            notification_id="minidsp_tide16_yaml_migrated",
+        # custom_value: the list is a shortcut, not a restriction. A unit on
+        # another subnet, or asleep when the scan ran, is still reachable by
+        # typing its address.
+        default = (user_input or {}).get(CONF_HOST) or (
+            options[0]["value"] if options else ""
         )
 
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=default): SelectSelector(
+                        SelectSelectorConfig(
+                            options=options,
+                            custom_value=True,
+                            mode=SelectSelectorMode.DROPDOWN,
+                            sort=False,
+                        )
+                    ),
+                    vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
+                }
+            ),
+            errors=errors,
+            description_placeholders={"found": self._found_message(len(options))},
+        )
+
+    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
+        """The 0.x `minidsp_tide16:` YAML key, turned into an entry once.
+
+        Not probed: the unit may well be in standby while Home Assistant
+        starts, and that must not lose the configuration.
+        """
+        if self._async_current_entries():
+            return self.async_abort(reason="already_configured")
+        host = str(import_data[CONF_HOST]).strip()
+        port = int(import_data.get(CONF_PORT, DEFAULT_PORT))
         return self.async_create_entry(
-            title=f"miniDSP Tide16 ({host})",
-            data={CONF_HOST: host, CONF_PORT: port},
+            title=DEVICE_NAME, data={CONF_HOST: host, CONF_PORT: port}
         )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
+        """Point the entry at a new address without losing anything."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
-
         if user_input is not None:
-            host = user_input[CONF_HOST]
-            port = user_input.get(CONF_PORT, DEFAULT_PORT)
-            unchanged = (
-                host == entry.data.get(CONF_HOST)
-                and port == entry.data.get(CONF_PORT, DEFAULT_PORT)
+            host = str(user_input[CONF_HOST]).strip()
+            port = int(user_input.get(CONF_PORT, DEFAULT_PORT))
+            unchanged = host == entry.data.get(CONF_HOST) and port == entry.data.get(
+                CONF_PORT, DEFAULT_PORT
             )
-            # v20: skip the connectivity test when nothing actually
-            # changed - the running coordinator already holds the
-            # Tide16's single WebSocket slot (see module docstring), so
-            # re-testing the exact same address here could fail for a
-            # reason that has nothing to do with whether the address is
-            # correct.
-            if unchanged or await _test_connection(self.hass, host, port):
+            if not unchanged:
+                try:
+                    await Tide16Client(host, port).probe()
+                except Tide16Error:
+                    errors["base"] = "cannot_connect"
+            if not errors:
                 return self.async_update_reload_and_abort(
-                    entry,
-                    data_updates={CONF_HOST: host, CONF_PORT: port},
+                    entry, data_updates={CONF_HOST: host, CONF_PORT: port}
                 )
-            errors["base"] = "cannot_connect"
-
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_schema(entry.data),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "")): str,
+                    vol.Optional(
+                        CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)
+                    ): int,
+                }
+            ),
             errors=errors,
+        )
+
+    @staticmethod
+    def _found_message(count: int) -> str:
+        if count == 1:
+            return (
+                "Found a Tide16 on this network. Pick it below, or type another "
+                "address."
+            )
+        if count > 1:
+            return (
+                f"Found {count} Tide16 units on this network. Pick one below, or "
+                "type another address."
+            )
+        return (
+            "No Tide16 found on this network. A Tide16 in standby leaves the "
+            "network entirely, so switch it on and try again - or type its "
+            "address below if it is on a different subnet."
+        )
+
+
+class Tide16OptionsFlow(OptionsFlow):
+    """Audio detection, for the systems the defaults do not fit.
+
+    Both defaults were measured on real material rather than chosen, and most
+    installs will never open this.  It exists because "silent" is a different
+    level on every system - an analog input, or a source that keeps a low-level
+    signal alive between tracks, sits far above digital silence - and the two
+    ways that goes wrong are both invisible from inside the integration.
+
+    The entry reloads on save, so a change applies without a restart.
+    """
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        # Deliberately not `self.config_entry`: assigning that is deprecated on
+        # newer cores and this has to run on 2024.7 as well.
+        self._entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                data={
+                    CONF_SIGNAL_RELATIVE: float(user_input[CONF_SIGNAL_RELATIVE]),
+                    CONF_SILENCE_LEVEL: float(user_input[CONF_SILENCE_LEVEL]),
+                    CONF_SILENCE_HOLD: float(user_input[CONF_SILENCE_HOLD]),
+                    CONF_UPDATE_CHECK: bool(user_input[CONF_UPDATE_CHECK]),
+                }
+            )
+
+        options = self._entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SIGNAL_RELATIVE,
+                        default=float(
+                            options.get(CONF_SIGNAL_RELATIVE, DEFAULT_SIGNAL_RELATIVE)
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=MIN_SIGNAL_RELATIVE,
+                            max=MAX_SIGNAL_RELATIVE,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="dB",
+                        )
+                    ),
+                    vol.Required(
+                        CONF_SILENCE_LEVEL,
+                        default=float(
+                            options.get(CONF_SILENCE_LEVEL, DEFAULT_SILENCE_LEVEL)
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=MIN_SILENCE_LEVEL,
+                            max=MAX_SILENCE_LEVEL,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="dB",
+                        )
+                    ),
+                    vol.Required(
+                        CONF_SILENCE_HOLD,
+                        default=float(
+                            options.get(CONF_SILENCE_HOLD, DEFAULT_SILENCE_HOLD)
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=MIN_SILENCE_HOLD,
+                            max=MAX_SILENCE_HOLD,
+                            step=1,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="seconds",
+                        )
+                    ),
+                    vol.Required(
+                        CONF_UPDATE_CHECK,
+                        default=bool(options.get(CONF_UPDATE_CHECK, DEFAULT_UPDATE_CHECK)),
+                    ): BooleanSelector(),
+                }
+            ),
         )

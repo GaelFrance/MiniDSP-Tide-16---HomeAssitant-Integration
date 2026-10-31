@@ -1,121 +1,144 @@
-"""Tide16 buttons: sources, volume +/-, shutdown, reboot, Bluetooth pair.
+"""Buttons: power, volume steps, one per input, reboot, pairing, scenes.
 
-Every entity_id is set explicitly (self.entity_id = ...) instead of relying
-on Home Assistant's has_entity_name auto-slugging. That auto-slugging
-turned out to not match what was assumed when the dashboards were written
-(entities showed up as "Entite non trouvee"), so pinning the exact id here
-keeps the dashboards matching reality on first creation. In practice, once
-an entity is registered, Home Assistant's entity registry is what actually
-decides the entity_id on every subsequent restart (keyed by unique_id) -
-self.entity_id here only matters the first time. Unique_id, not this
-line, is the real long-term identity of each entity.
+The scenes, reboot and pairing come from the ControlCard integration; the
+shutdown, volume and input buttons from minidsp_tide16 0.x, with their old
+unique ids (minidsp_tide16_shutdown, minidsp_tide16_volume_up,
+minidsp_tide16_source_spotify...) so automations, scripts and the HomeKit
+scripts that press them keep working.
 """
+
 from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SOURCE_LABEL_TO_ID, VOLUME_STEP_DB, slugify_label
+from .api.const import REBOOT, SET_BT_PAIRING, SET_SCENE, SET_SOURCE, SHUTDOWN
+from .const import DOMAIN, SCENES, SOURCE_LABEL_TO_ID, VOLUME_STEP_DB, slugify_label
+from .coordinator import Tide16Coordinator
 from .entity import Tide16Entity
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: Tide16Coordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[ButtonEntity] = [
-        Tide16ShutdownButton(coordinator),
-        Tide16RebootButton(coordinator),
-        Tide16BluetoothPairButton(coordinator),
-        Tide16VolumeUpButton(coordinator),
-        Tide16VolumeDownButton(coordinator),
+        Tide16Button(coordinator, "shutdown", "Shutdown", SHUTDOWN, {}, "mdi:power"),
+        Tide16Button(coordinator, "reboot", "Reboot", REBOOT, {}, "mdi:restart"),
+        Tide16Button(
+            coordinator,
+            "bluetooth_pair",
+            "Bluetooth Pair",
+            SET_BT_PAIRING,
+            {},
+            "mdi:bluetooth-settings",
+        ),
+        Tide16ActionButton(
+            coordinator,
+            "volume_up",
+            "Volume Up",
+            "mdi:volume-plus",
+            lambda: coordinator.async_nudge_volume(VOLUME_STEP_DB),
+        ),
+        Tide16ActionButton(
+            coordinator,
+            "volume_down",
+            "Volume Down",
+            "mdi:volume-minus",
+            lambda: coordinator.async_nudge_volume(-VOLUME_STEP_DB),
+        ),
+        Tide16ActionButton(
+            coordinator,
+            "check_for_update",
+            "Check for Update",
+            "mdi:update",
+            coordinator.async_check_for_update,
+            category=EntityCategory.DIAGNOSTIC,
+        ),
     ]
     entities += [
         Tide16SourceButton(coordinator, label, source_id)
         for label, source_id in SOURCE_LABEL_TO_ID.items()
     ]
+    # The device stores four scenes against the colours on its own remote, so
+    # the panel's coloured buttons recall the slot of the same name.  A slot
+    # that was never saved recalls nothing, which is not a fault.
+    for index, colour in enumerate(SCENES, start=1):
+        entities.append(
+            Tide16Button(
+                coordinator,
+                f"scene_{colour}",
+                f"Scene {colour.title()}",
+                SET_SCENE,
+                {"index": index},
+                "mdi:palette",
+            )
+        )
     async_add_entities(entities)
 
 
-class _Tide16Button(Tide16Entity, ButtonEntity):
-    _object_id = "override_me"
+class Tide16Button(Tide16Entity, ButtonEntity):
+    """Sends one fixed command."""
 
-    def __init__(self, coordinator) -> None:
-        super().__init__(coordinator)
-        self.entity_id = f"button.{self._object_id}"
-
-
-class Tide16ShutdownButton(_Tide16Button):
-    _attr_name = "Shutdown"
-    _attr_unique_id = "minidsp_tide16_shutdown"
-    _attr_icon = "mdi:power"
-    _object_id = "tide16_shutdown"
-
-    async def async_press(self) -> None:
-        await self._coordinator.async_shutdown()
-
-
-class Tide16RebootButton(_Tide16Button):
-    _attr_name = "Reboot"
-    _attr_unique_id = "minidsp_tide16_reboot"
-    _attr_icon = "mdi:restart"
-    _object_id = "tide16_reboot"
+    def __init__(
+        self,
+        coordinator: Tide16Coordinator,
+        key: str,
+        name: str,
+        endpoint: str,
+        args: dict,
+        icon: str,
+    ) -> None:
+        super().__init__(coordinator, key, name)
+        self._endpoint = endpoint
+        self._args = args
+        self._attr_icon = icon
 
     async def async_press(self) -> None:
-        await self._coordinator.async_reboot()
+        await self.coordinator.async_send(self._endpoint, **self._args)
 
 
-class Tide16BluetoothPairButton(_Tide16Button):
-    _attr_name = "Bluetooth Pair"
-    _attr_unique_id = "minidsp_tide16_bt_pair"
-    _attr_icon = "mdi:bluetooth"
-    _object_id = "tide16_bluetooth_pair"
+class Tide16ActionButton(Tide16Entity, ButtonEntity):
+    """Runs a coordinator method."""
 
-    async def async_press(self) -> None:
-        await self._coordinator.async_bluetooth_pair()
-
-
-class Tide16VolumeUpButton(_Tide16Button):
-    _attr_name = "Volume Up"
-    _attr_unique_id = "minidsp_tide16_volume_up"
-    _attr_icon = "mdi:volume-plus"
-    _object_id = "tide16_volume_up"
-
-    async def async_press(self) -> None:
-        await self._coordinator.async_nudge_volume(VOLUME_STEP_DB)
-
-
-class Tide16VolumeDownButton(_Tide16Button):
-    _attr_name = "Volume Down"
-    _attr_unique_id = "minidsp_tide16_volume_down"
-    _attr_icon = "mdi:volume-minus"
-    _object_id = "tide16_volume_down"
+    def __init__(
+        self,
+        coordinator: Tide16Coordinator,
+        key: str,
+        name: str,
+        icon: str,
+        action: Callable[[], Awaitable[None]],
+        *,
+        category: EntityCategory | None = None,
+    ) -> None:
+        super().__init__(coordinator, key, name)
+        self._action = action
+        self._attr_icon = icon
+        self._attr_entity_category = category
 
     async def async_press(self) -> None:
-        await self._coordinator.async_nudge_volume(-VOLUME_STEP_DB)
+        await self._action()
 
 
-class Tide16SourceButton(_Tide16Button):
+class Tide16SourceButton(Tide16Entity, ButtonEntity):
+    """Select one input. The id and slug never change; the name follows the unit."""
+
     _attr_icon = "mdi:import"
 
-    def __init__(self, coordinator, label: str, source_id: str) -> None:
+    def __init__(self, coordinator: Tide16Coordinator, label: str, source_id: str) -> None:
+        super().__init__(coordinator, f"source_{slugify_label(label)}", f"Source: {label}")
         self._source_id = source_id
         self._fallback_label = label
-        slug = slugify_label(label)
-        self._object_id = f"tide16_source_{slug}"
-        super().__init__(coordinator)
-        self._attr_unique_id = f"minidsp_tide16_source_{slug}"
 
     @property
     def name(self) -> str:
-        # v16: prefer the live display name from get_source_names /
-        # source_names_change (whatever's actually configured on the
-        # device right now) over the fallback label baked in at build
-        # time - entity_id/unique_id above are unaffected either way.
-        live_name = self._coordinator.data.get("source_names", {}).get(self._source_id)
-        return f"Source: {live_name or self._fallback_label}"
+        live = (self.coordinator.data.get("source_names") or {}).get(self._source_id)
+        return f"Source: {live or self._fallback_label}"
 
     async def async_press(self) -> None:
-        await self._coordinator.async_select_source(self._source_id)
+        await self.coordinator.async_send(SET_SOURCE, value=self._source_id)

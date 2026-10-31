@@ -1,17 +1,30 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
 
 # Editors / OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
 # Logs
+# Node (nothing here needs building - the card ships as source inside
+# Note this is the one file, NOT tools/: the rest of tools/ ships, because
+# Python
+# Python bytecode from the integration
+# Source text for the packed idle table - keep it out of the repo, or the
+# The packer explains what the idle blob contains, which defeats the point
+# check_layout_sync.py is a release step anyone should be able to run.
+# custom_components/minidsp_tide16/frontend/ - but keep the cruft out if anyone
+# ever adds tooling)
+# of packing it. Kept local - the packed blob is all the card needs.
+# whole point of packing it is lost. Ship only the packed blob.
+*$py.class
+*.egg-info/
 *.log
+*.py[cod]
+*.pyc
+.DS_Store
+.idea/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+Thumbs.db
+__pycache__/
+node_modules/
+quotes.txt
+tools/pack_strings.py

@@ -1,161 +1,297 @@
-"""The miniDSP Tide16 integration.
+"""miniDSP Tide16 - device, entities and the front-panel card.
 
-Added in v18: a proper config_flow (see config_flow.py), so the
-integration can be set up from Settings > Devices & services > Add
-integration, instead of only via YAML.
+v1.0.0 is the ControlCard integration (speedtoys, MIT) merged into
+minidsp_tide16: its device and settings coverage and its card, under this
+domain and with the 0.x entity identities, volume stepping and
+volume-compensated signal detection. See CHANGELOG.md.
 
-The legacy `minidsp_tide16:` YAML key still works, but now only as a
-one-time migration trigger: on startup, if present, async_setup() below
-kicks off an import flow that creates a real config entry from it (see
-async_step_import in config_flow.py, which also fires the one-time
-"migrated successfully" notification - NOT this file; see v19 note
-below for why that distinction matters). From then on, the config entry
-- not the YAML - is what's actually used; you can remove the YAML key
-from configuration.yaml at your leisure (re-importing an
-already-migrated config on a later restart is a harmless no-op, so
-there's no rush and no risk in leaving both in place for a while).
-
-v19 fixes (a third independent review, credited in CHANGELOG.md):
-  - The migration notification used to be fired from async_setup_entry()
-    below, gated on `entry.source == SOURCE_IMPORT`. That gate is true
-    forever for an imported entry - not just the first time - so the
-    notification was silently re-appearing on every single restart or
-    reload. Moved to config_flow.py's async_step_import(), which only
-    runs once, exactly when the entry is created.
-  - async_setup_entry() now starts the coordinator's connection AFTER
-    the platforms have loaded successfully (entities just show
-    "unavailable" for the brief moment until the connection comes up,
-    which is what they're designed to do anyway - see entity.py). If
-    platform setup itself raises, the coordinator is removed from
-    hass.data before re-raising - it was never started in the first
-    place at that point (async_connect() only runs below, after this
-    succeeds), so there's no background task or open connection left to
-    stop; this just prevents a dangling, unstarted coordinator reference
-    from lingering in hass.data for an entry Home Assistant considers
-    failed.
-
-v21 fix: Home Assistant logs a "Detected blocking call to import_module
-... inside the event loop" warning the first time a platform module
-(button.py, sensor.py, etc.) gets imported synchronously via
-async_forward_entry_setups() below - importing a Python module involves
-blocking file I/O, which isn't supposed to happen on the event loop
-thread. Harmless on its own (this run's actual setup failure was a
-separate, real bug - a deprecated import removed from newer Home
-Assistant releases, fixed in sensor.py), but worth silencing anyway since
-it fires on every single setup. Fixed by explicitly pre-importing all
-platform modules in Home Assistant's dedicated import executor thread
-before forwarding entry setup to them, so that by the time
-async_forward_entry_setups() needs them, they're already cached in
-sys.modules and no import happens on the event loop at all.
-
-Nothing about the YAML migration touches any entity's unique_id or
-entity_id - see button.py's docstring for why that's what actually
-matters. Existing automations, dashboards, areas, and customizations are
-unaffected.
+One HACS install gets all of it.  The card and its plate art ship inside this
+package and are registered with the frontend on setup, so there is no Lovelace
+resource to add, no files to copy into `www/`, and no cache-buster to bump by
+hand - the URL carries the manifest version.
 """
+
 from __future__ import annotations
 
-import asyncio
-import importlib
 import logging
+from pathlib import Path
 
 import voluptuous as vol
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 
-from .const import CONF_HOST, CONF_PORT, DEFAULT_PORT, DOMAIN
+from .api.const import SET_PRESET
+from .autodim import Tide16AutoDim
+from .const import (
+    ATTR_DELTA,
+    ATTR_DURATION,
+    ATTR_PRESET,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_SIGNAL_RELATIVE,
+    CONF_SILENCE_HOLD,
+    CONF_SILENCE_LEVEL,
+    CONF_UPDATE_CHECK,
+    DEFAULT_SIGNAL_RELATIVE,
+    DEFAULT_SILENCE_HOLD,
+    DEFAULT_SILENCE_LEVEL,
+    DEFAULT_UPDATE_CHECK,
+    DOMAIN,
+    PANEL_JS,
+    SERVICE_MEASURE_LEVEL,
+    SERVICE_SET_PRESET,
+    SERVICE_VOLUME_STEP,
+    STATIC_URL,
+)
 from .coordinator import Tide16Coordinator
+from .websocket import async_register_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
 
+# The legacy `minidsp_tide16:` YAML key (host, port) of 0.x is still read,
+# once, to create a config entry if none exists - see async_setup.
 CONFIG_SCHEMA = vol.Schema(
     {
-        DOMAIN: vol.Schema(
+        vol.Optional(DOMAIN): vol.Schema(
             {
                 vol.Required(CONF_HOST): cv.string,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+                vol.Optional(CONF_PORT, default=5555): cv.port,
             }
         )
     },
     extra=vol.ALLOW_EXTRA,
 )
 
-PLATFORMS = [
-    Platform.BUTTON,
-    Platform.SWITCH,
-    Platform.NUMBER,
-    Platform.SENSOR,
-    Platform.MEDIA_PLAYER,
+PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.MEDIA_PLAYER,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
 ]
 
+VOLUME_STEP_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DELTA): vol.All(
+            vol.Coerce(float), vol.Range(min=-60, max=60)
+        ),
+    }
+)
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Only handles the legacy YAML key now, as a one-time import trigger.
-    Real setup happens in async_setup_entry() below, once a config entry
-    exists (either from this import or from adding the integration
-    manually via the UI)."""
-    conf = config.get(DOMAIN)
-    if conf is None:
-        return True
+MEASURE_LEVEL_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_DURATION, default=10): vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=120)
+        ),
+    }
+)
 
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": config_entries.SOURCE_IMPORT},
-            data=conf,
+
+def preset_id(value: object) -> str:
+    """The id the unit wants, from whatever a caller passed.
+
+    `set_preset` takes the id as a string, and a dashboard, a script and the
+    UI's own number field each hand it over differently - 2, 2.0, "2".  All
+    three mean the same slot, so they are folded to one spelling here rather
+    than left to fail as a mismatch nobody can see.  An id that is not a
+    number at all is passed through untouched: the ids are the unit's, not
+    ours, and it is not this function's business to have opinions about them.
+    """
+    text = str(value).strip()
+    try:
+        return str(int(float(text)))
+    except ValueError:
+        return text
+
+
+def preset_sort(pid: str) -> tuple[int, float, str]:
+    """Order ids the way a person reads them: 2 before 10, names last."""
+    try:
+        return (0, float(pid), "")
+    except ValueError:
+        return (1, 0.0, pid)
+
+
+SET_PRESET_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_PRESET): vol.All(preset_id, vol.Length(min=1)),
+    }
+)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the card once, whether or not a unit is configured yet."""
+    await _async_register_frontend(hass)
+    if DOMAIN in config and not hass.config_entries.async_entries(DOMAIN):
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_IMPORT}, data=dict(config[DOMAIN])
+            )
         )
-    )
     return True
-
-
-async def _async_preload_platforms(hass: HomeAssistant) -> None:
-    """Import every platform module in Home Assistant's dedicated import
-    executor thread, instead of letting async_forward_entry_setups()
-    below import whichever ones aren't cached in sys.modules yet -
-    directly on the event loop, which is what triggers the "Detected
-    blocking call to import_module ... inside the event loop" warning.
-    Once a module is imported once, Python caches it, so this makes the
-    later async_forward_entry_setups() call a cheap no-op import for all
-    six platforms instead of six blocking file-I/O imports."""
-    import_job = getattr(hass, "async_add_import_executor_job", hass.async_add_executor_job)
-    await asyncio.gather(
-        *(
-            import_job(importlib.import_module, f"{__name__}.{platform.value}")
-            for platform in PLATFORMS
-        )
-    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = Tide16Coordinator(
-        hass, entry.data[CONF_HOST], entry.data.get(CONF_PORT, DEFAULT_PORT)
+        hass,
+        entry.data[CONF_HOST],
+        entry.data.get(CONF_PORT, 5555),
+        silence_level=float(
+            entry.options.get(CONF_SILENCE_LEVEL, DEFAULT_SILENCE_LEVEL)
+        ),
+        silence_hold=float(entry.options.get(CONF_SILENCE_HOLD, DEFAULT_SILENCE_HOLD)),
+        signal_relative=float(
+            entry.options.get(CONF_SIGNAL_RELATIVE, DEFAULT_SIGNAL_RELATIVE)
+        ),
+        update_check=bool(entry.options.get(CONF_UPDATE_CHECK, DEFAULT_UPDATE_CHECK)),
     )
+    await coordinator.async_start()
+
+    coordinator.autodim = Tide16AutoDim(hass, coordinator)
+    coordinator.autodim.async_start()
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    try:
-        await _async_preload_platforms(hass)
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    except Exception:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-        raise
+    async_register_websocket_api(hass)
+    _async_register_services(hass)
 
-    # Only start connecting once the platforms are up - if this failed
-    # above, there'd be no entities around to receive the coordinator's
-    # updates anyway. Entities show "unavailable" until the connection
-    # comes up, which takes at most a couple of seconds on a local
-    # network - see entity.py.
-    coordinator.async_connect()
-
+    entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
         coordinator: Tide16Coordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        if coordinator.autodim:
+            coordinator.autodim.async_stop()
         await coordinator.async_stop()
-    return unload_ok
+        if not hass.data[DOMAIN]:
+            hass.services.async_remove(DOMAIN, SERVICE_VOLUME_STEP)
+            hass.services.async_remove(DOMAIN, SERVICE_MEASURE_LEVEL)
+            hass.services.async_remove(DOMAIN, SERVICE_SET_PRESET)
+    return unloaded
+
+
+async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Serve the card from this package and load it on every dashboard."""
+    if hass.data.get(f"{DOMAIN}_frontend"):
+        return
+    hass.data[f"{DOMAIN}_frontend"] = True
+
+    root = Path(__file__).parent / "frontend"
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(STATIC_URL, str(root), False)]
+    )
+
+    integration = await async_get_integration(hass, DOMAIN)
+    version = str(integration.version or "dev")
+    # The version in the URL is the whole cache-busting story: update the
+    # integration and every browser fetches the new module, with nothing for
+    # anyone to remember to bump.
+    frontend.add_extra_js_url(hass, f"{STATIC_URL}/{PANEL_JS}?v={version}")
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    if hass.services.has_service(DOMAIN, SERVICE_VOLUME_STEP):
+        return
+
+    async def _volume_step(call: ServiceCall) -> None:
+        """Relative dB, clamped, applied to every configured unit.
+
+        Server-side because a dashboard tap carries literal data and cannot
+        read the current level to add to it - which is exactly why this used to
+        be a hand-written script in the user's own YAML.
+        """
+        delta = float(call.data[ATTR_DELTA])
+        for coordinator in hass.data.get(DOMAIN, {}).values():
+            # Same path as the Volume Up/Down buttons, so quick taps on the
+            # card's volume keys accumulate instead of all reading the same
+            # unconfirmed level.
+            await coordinator.async_nudge_volume(delta)
+
+    async def _measure_output_level(call: ServiceCall) -> ServiceResponse:
+        """Report what the output is doing, so a threshold can be chosen.
+
+        It returns rather than stores.  This is something a user runs once
+        while deciding on a number, and an entity holding it would put the very
+        levels this design keeps out of the recorder straight back into it.
+        """
+        coordinators = list(hass.data.get(DOMAIN, {}).values())
+        if not coordinators:
+            raise HomeAssistantError("No Tide16 is configured.")
+        return await coordinators[0].async_measure_levels(
+            float(call.data[ATTR_DURATION])
+        )
+
+    async def _set_preset(call: ServiceCall) -> None:
+        """Recall a preset by id, whatever the slot happens to be named.
+
+        The select entity carries the name in its option strings, because a
+        dropdown that says "2" and nothing else is no use to a person.  That
+        is exactly what makes it unusable from an automation: naming a preset
+        on the unit rewrites every option, and `select.select_option` then
+        rejects the number that used to work.  This reads the id and only the
+        id, so a rename cannot reach it.
+
+        An id no unit holds raises rather than passing quietly to a device
+        that would ignore it - a silent no-op is the failure being reported.
+        """
+        wanted = preset_id(call.data[ATTR_PRESET])
+        coordinators = list(hass.data.get(DOMAIN, {}).values())
+        if not coordinators:
+            raise HomeAssistantError("No Tide16 is configured.")
+
+        known: set[str] = set()
+        sent = False
+        for coordinator in coordinators:
+            slots = {
+                str(slot.get("id"))
+                for slot in coordinator.data.get("presets") or []
+                if isinstance(slot, dict) and slot.get("id") is not None
+            }
+            known |= slots
+            if wanted in slots:
+                await coordinator.async_send(SET_PRESET, id=wanted)
+                sent = True
+
+        if not sent:
+            # Ids are not contiguous - units answer 1, 3..12 - so listing the
+            # ones that exist is more use than saying how many there are.
+            offered = ", ".join(sorted(known, key=preset_sort)) or "none"
+            raise HomeAssistantError(
+                f"No Tide16 has preset {wanted}. Presets on this system: {offered}."
+            )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_VOLUME_STEP, _volume_step, schema=VOLUME_STEP_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_PRESET, _set_preset, schema=SET_PRESET_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MEASURE_LEVEL,
+        _measure_output_level,
+        schema=MEASURE_LEVEL_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )

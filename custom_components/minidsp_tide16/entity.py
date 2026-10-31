@@ -1,61 +1,120 @@
-"""Shared base mixin for every Tide16 entity.
+"""Shared base for every Tide16 entity."""
 
-v16: previously each platform file (button/switch/number/sensor/
-media_player/binary_sensor) duplicated the same device_info property and
-dispatcher-update wiring. Factored out here, plus a new `available`
-property tied to the coordinator's connection state - entities now show
-as "unavailable" in Home Assistant when the Tide16 can't be reached
-(standby, network issue, reconnecting) instead of silently keeping their
-last-known value forever, which could otherwise look like a real reading.
-
-Usage: mix this in FIRST, before the platform's own entity base class, so
-its properties/methods aren't shadowed:
-
-    class Tide16MuteSwitch(Tide16Entity, SwitchEntity):
-        ...
-"""
 from __future__ import annotations
 
-from homeassistant.core import callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+import asyncio
+from typing import Any
 
-from .const import SIGNAL_TIDE16_UPDATE, tide16_device_info
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import (
+    DEVICE_IDENTIFIER,
+    DEVICE_NAME,
+    DOMAIN,
+    LEGACY_UNIQUE_IDS,
+    MANUFACTURER,
+    MODEL,
+)
+from .coordinator import Tide16Coordinator
+from .settings import Tide16Setting, value_at
 
 
-class Tide16Entity:
+def unique_id_for(key: str) -> str:
+    """The registry identity of one entity, stable across versions."""
+    return LEGACY_UNIQUE_IDS.get(key, f"{DOMAIN}_{key}")
+
+
+class Tide16Entity(CoordinatorEntity[Tide16Coordinator]):
+    """Device identity, availability and naming, in one place.
+
+    `has_entity_name` with a fixed device name is what keeps the entity_ids
+    the panel is written against - sensor.tide16_status, number.tide16_volume
+    and the rest - stable whatever the user calls the device afterwards.
+    """
+
     _attr_has_entity_name = True
-    _attr_should_poll = False
 
-    def __init__(self, coordinator) -> None:
-        self._coordinator = coordinator
-
-    @property
-    def device_info(self):
-        return tide16_device_info()
+    def __init__(self, coordinator: Tide16Coordinator, key: str, name: str | None) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = name
+        # Not keyed on the host: an entity keeps its identity when the unit
+        # changes address. Entities that existed in minidsp_tide16 0.x keep
+        # their old unique_id - see const.LEGACY_UNIQUE_IDS.
+        self._attr_unique_id = unique_id_for(key)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, DEVICE_IDENTIFIER)},
+            name=DEVICE_NAME,
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+            configuration_url=f"http://{coordinator.host}:5050",
+        )
 
     @property
     def available(self) -> bool:
-        """False whenever the coordinator can't reach the Tide16.
+        """Unavailable while the unit is away, so the panel dashes.
 
-        Subclasses that should stay visible even when offline (e.g. the
-        status sensor, which needs to be able to display "not connected")
-        override this to return True unconditionally.
+        Standby takes the Tide16 off the network entirely; a reading held over
+        from before it went is worse than no reading, because the panel would
+        print it as if it were current.
         """
-        return bool(self._coordinator.data.get("connected"))
+        return self.coordinator.connected
 
-    async def async_added_to_hass(self) -> None:
-        # v19: call the parent implementation first - good practice for
-        # any entity that overrides this hook, and matters in particular
-        # for platform base classes (e.g. RestoreEntity, used by some HA
-        # entity types) that rely on their own async_added_to_hass()
-        # running. This mixin is meant to be listed before the platform's
-        # entity class (see the docstring above), so without this call
-        # the platform class's own hook would never run.
-        await super().async_added_to_hass()
-        self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_TIDE16_UPDATE, self._handle_update)
+
+# The unit accepts a write in about 3ms and applies it a few hundred
+# milliseconds later - measured at ~570ms for the Dolby profile. Nothing
+# pushes `get_settings`, so a read-back is the only confirmation there is, and
+# one fired straight after the send reads the OLD value every time.
+CONFIRM_INTERVAL = 0.25
+CONFIRM_ATTEMPTS = 8  # 2s, comfortably past the ~570ms the unit takes
+
+
+class Tide16SettingEntity(Tide16Entity):
+    """An entity backed by one row of the settings table - see settings.py.
+
+    Everything these have in common: where to read the value from, how to
+    write it, and showing the requested value while the unit catches up so a
+    toggle does not spring back under the finger.
+    """
+
+    def __init__(self, coordinator: Tide16Coordinator, setting: Tide16Setting) -> None:
+        super().__init__(coordinator, setting.key, setting.name)
+        self._setting = setting
+        self._attr_entity_category = setting.category
+        self._attr_icon = setting.icon
+        self._pending: Any = None
+
+    @property
+    def _settings(self) -> dict[str, Any]:
+        return self.coordinator.data.get("settings") or {}
+
+    @property
+    def _value(self) -> Any:
+        """The value to display: what was asked for, else what the unit says."""
+        if self._pending is not None:
+            return self._pending
+        return value_at(self._settings, self._setting.path)
+
+    async def _write(self, value: Any) -> None:
+        setting = self._setting
+        if not setting.endpoint:
+            return
+        await self.coordinator.async_send(
+            setting.endpoint, **setting.build(value, self._settings)
         )
 
-    @callback
-    def _handle_update(self) -> None:
+        self._pending = value
         self.async_write_ha_state()
+        try:
+            for _ in range(CONFIRM_ATTEMPTS):
+                await asyncio.sleep(CONFIRM_INTERVAL)
+                await self.coordinator.async_refresh_settings()
+                if value_at(self._settings, setting.path) == value:
+                    break
+        finally:
+            # Dropped either way. If the unit never agreed - a firmware
+            # without that endpoint, or a value it clamped - its own reading
+            # stands rather than leaving a lie on screen.
+            self._pending = None
+            self.async_write_ha_state()

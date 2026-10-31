@@ -2,28 +2,53 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connexion à votre miniDSP Tide16",
-        "description": "Entrez le nom d'hôte ou l'adresse IP du Tide16 sur votre réseau local (ex. minidsp-tide.local ou 192.168.1.50).",
+        "title": "miniDSP Tide16",
+        "description": "{found}",
         "data": {
-          "host": "Hôte ou adresse IP",
+          "host": "Hôte",
           "port": "Port"
+        },
+        "data_description": {
+          "host": "Choisissez un Tide16 trouvé sur le réseau, ou tapez son adresse IP ou son nom.",
+          "port": "Port WebSocket du Tide16. Ne le changez que si vous l'avez modifié sur l'appareil."
         }
       },
       "reconfigure": {
-        "title": "Mettre à jour la connexion au miniDSP Tide16",
-        "description": "Modifiez le nom d'hôte ou l'adresse IP si le Tide16 a changé d'adresse sur votre réseau.",
+        "title": "Modifier la connexion au Tide16",
+        "description": "Changez l'adresse si le Tide16 a changé d'IP.",
         "data": {
-          "host": "Hôte ou adresse IP",
+          "host": "Hôte",
           "port": "Port"
         }
       }
     },
     "error": {
-      "cannot_connect": "Impossible de se connecter à un Tide16 à cette adresse. Vérifiez l'hôte/IP et que l'appareil est allumé."
+      "cannot_connect": "Pas de réponse à cette adresse. En veille, le Tide16 quitte le réseau : allumez-le et réessayez."
     },
     "abort": {
-      "single_instance_allowed": "Un seul miniDSP Tide16 peut être configuré.",
-      "reconfigure_successful": "Les paramètres de connexion ont été mis à jour."
+      "already_configured": "Ce Tide16 est déjà configuré.",
+      "single_instance_allowed": "Un seul Tide16 peut être configuré.",
+      "reconfigure_successful": "La connexion a été mise à jour."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Détection audio et mises à jour",
+        "description": "Les vumètres de sortie sont mesurés après le volume : le capteur Signal audio compare donc le niveau du programme (crête moins volume) à un seuil. S'il passe à off pendant les passages calmes, baissez ce seuil ; s'il ne repasse jamais à off, montez-le.",
+        "data": {
+          "signal_relative_level": "Niveau de programme considéré comme du signal",
+          "silence_level": "Seuil de secours tant que le volume est inconnu",
+          "silence_hold": "Signaler le silence après",
+          "update_check": "Chercher une mise à jour du firmware toutes les heures"
+        },
+        "data_description": {
+          "signal_relative_level": "Crête de sortie moins le volume. −60 dB garde la musique classique douce détectée à bas volume.",
+          "silence_level": "Utilisé seulement avant que l'appareil ait donné son volume.",
+          "silence_hold": "Durée sans aucun signal avant que Signal audio passe à off. Le retour du son est signalé immédiatement.",
+          "update_check": "Désactivé par défaut : pendant la recherche, l'état du Tide16 affiche « Reaching update server... » jusqu'à une minute. Le bouton « Check for update » lance la recherche à la demande."
+        }
+      }
     }
   }
 }
