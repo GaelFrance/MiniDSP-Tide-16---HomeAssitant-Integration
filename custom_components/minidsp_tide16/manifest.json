@@ -1,6 +1,7 @@
 {
   "domain": "minidsp_tide16",
   "name": "miniDSP Tide16",
+  "categories": ["media_entertainment.speakers_audio"],
   "codeowners": ["@GaelFrance"],
   "config_flow": true,
   "dependencies": ["frontend", "http", "network", "websocket_api"],
